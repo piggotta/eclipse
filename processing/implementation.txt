@@ -1,0 +1,124 @@
+Images
+  IMG_0978: First sun
+  IMG_0994: First partial eclipse
+  IMG_1343: First total eclipse
+  IMG_1468: Last total eclipse
+  IMG_1805: Last partial eclipse
+  IMG_1812: Last sun
+  IMG_1813, IMG_1815: Black frames (1/2000, ISO100)
+
+Image parameters
+  Partials
+    Exposure: 1 / 2000 s
+    F-number: 8
+    ISO: 100
+
+  Total (max exposure):
+    Exposure: 5 s
+    F-number: 5.6
+    ISO: 2000
+
+  Total (min exposure):
+    Exposure: 1 / 2000 s
+    F-number: 8
+    ISO: 100
+
+Hot pixel handling
+ 0. Find hot pixels using black frames for all exposure levels.
+ 1. Use median filtering (within Bayer mask) on all images for hot pixels.
+
+Partial eclipse tracking
+ 1. Basic pre-processing of all partials.
+    a. Grab EXIF information, include time of image.
+      Discard image if it does not match expected exposure (1/2000),
+      F-number (8), and ISO (100).
+    b. Load raw image, and grab a single channel (green).
+    c. Determine black level. Define black as < 90th percentile, and find mean
+      and stdev.
+    d. Define "sun" as value > black_mean + 5 * black_stdev, and find mean and
+      stdev.
+    e. Crop image. Pick 99th percentiles on left and right edges of "sun"
+      pixels, and define center as halfway between them. 
+    e. Create thresholded image using
+         delta = 0.1 * (sun_mean - black_mean)
+         threshold = black_mean + 3 * delta
+         image = tanh((value  - threshold) / delta)
+    f. Save cropped and thresholded images, EXIF data, time since Unix epoch in
+       seconds, and black and sun level metadata to file.
+
+  2. Determine size of sun using sun-only images.
+
+  3. Perform sun + moon tracking using L-BFGS. Feed previous optimization
+     results into the next optimization step as the starting point.
+    a. Assume moon is same size as sun, and allow completely independent
+       tracking for a small subset of images to establish a basic track.
+    b. Fit quadratic function for relative position of moon to sun as function
+       of time.
+    c. Optimize over subset of images for (global) moon size, (global) quadratic
+       parameters for relative moon position, and solar position for every image.
+    d. Analyze every image, fitting only solar position.
+    e. Repeat c, but over all images.
+    f. Save tracking results to file.
+
+Total eclipse tracking
+  0. Load images with shortest exposure
+  1. Perform dumb, basic segmentation
+     a. Apply manually selected (relatively high) threshold level.
+     b. Fill outside of sun using floodfill.
+  2. Apply tanh thresholding, and combine with segmentation using
+       np.maximum(tanh_threshold_image, segmented_image)
+  3. Fit to moon (not sun!) position only using L-BFGS, as before.
+  4. Save tracking results to file.
+
+Partial eclipse: still frame generation
+ 1. Load raw image from file.
+ 2. Perform demosaicing.
+ 3. Translate both raw image and threshold image.
+ 4. <Correct for changes in brightness from clouds> ????
+    => Tricky since we also have to account for limb darkening
+    => Consider generating a "master" sun image, and using threshold image
+    to determine which pixels to compare.
+ 5. Apply black level and white level correction.
+ 6. Add local time to image.
+ 7. Save cropped image to file.
+
+Total eclipse: still frame
+ 1. Load all raw images from file corresponding to a single "exposure".
+   Note: throw away highest exposure.
+ 2. Perform HDR stacking using raw images directly.
+    => Probably not worth trying to adjust for image shift between shots.
+    => Keep an eye on HDR stacking algorithm to make sure we don't get bleeding
+      from higher-exposure shots into the black moon region.
+ 3. Perform demosaicing using highest performance approach.
+ 4. Save demosaiced image to .npz file.
+ 5. Apply "HDR algorithm" to make image look pretty.
+ 6. Add local time to image.
+ 7. Save HDR image to file.
+
+Partial eclipse: missing frame reconstruction
+ 1. Generate template for sun from sun-only shots.
+ 2. Generate template for moon edge using strong partial eclipse shots.
+ 3. Use tracking data to combine sun and moon-edge templates in correct
+ location.
+NOTE: if necessary, generate several sun and moon templates and randomly switch
+between them. Only bother doing this if the images look "too perfect".
+ 4. Add local time to image.
+ 5. Save image to file.
+
+Demosaicing
+ 1. For tracking algorithms, either use:
+    a. A single color channel (perhaps ideal)
+    b. Any cheap demosaicing algorithm (luminance noise should be smaller than
+    chromatic noise).
+   Global demosaicing with fixed constants does not work perfectly, even for partial eclipse
+   photos, because color appears to change across sun.
+
+ 2. Consider doing HDR stacking first, and then demosaicing.
+   Demosaic libraries:
+      https://pypi.org/project/colour-demosaicing/
+
+ 3. Algorithm=1 and median_filter_passes=3 seems best for demosaicing (less
+   color noise than default 3 on flat areas). With no median filtering, the
+   default 3 is essentially impossible to beat.
+
+
