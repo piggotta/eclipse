@@ -38,7 +38,7 @@ Partial eclipse tracking
     d. Define "sun" as value > black_mean + 5 * black_stdev, and find mean and
       stdev.
     e. Crop image. Pick 99th percentiles on left and right edges of "sun"
-      pixels, and define center as halfway between them. 
+      pixels, and define center as halfway between them.
     e. Create thresholded image using
          delta = 0.1 * (sun_mean - black_mean)
          threshold = black_mean + 3 * delta

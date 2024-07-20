@@ -1,13 +1,12 @@
 import dataclasses
 import datetime
-import glob
 import os
 
 import exifread
-import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import rawpy
+
 
 @dataclasses.dataclass
 class RawImage:
@@ -17,16 +16,17 @@ class RawImage:
   exposure_s: float
   f_number: float
   iso: int
-  raw_image: npt.NDArray
-  bw_image: npt.NDArray
+  raw_image: npt.NDArray | None
+  bw_image: npt.NDArray | None
 
-def load_image(filepath: str) -> npt.NDArray:
+
+def read_attributes(filepath) -> RawImage:
   # Read image index from filename.
   filename = os.path.split(filepath)[1]
   if filename[:4] != 'IMG_' or filename[-4:] != '.CR2':
     raise ValueError(f'Unexpected filename {filename}. Filename should be of '
                      'form IMG_*.CR2')
-  index = int(filename.strip('IMG_').strip('.CR2'))
+  index = int(filename[4:-4])
 
   # Read EXIF tag information.
   with open(filepath, 'rb') as f:
@@ -41,13 +41,6 @@ def load_image(filepath: str) -> npt.NDArray:
   date = date.replace(':', '-')
   image_time = datetime.datetime.fromisoformat(date + ' ' + time + '0')
 
-  # Read raw image.
-  with rawpy.imread(filepath) as raw:
-    raw_image = np.copy(raw.raw_image)
-
-  # Use (0, 0) Bayer subimage (green) as our black and white image.
-  green_image = raw_image[::2, ::2]
-
   return RawImage(
       filepath=filepath,
       index=index,
@@ -55,5 +48,20 @@ def load_image(filepath: str) -> npt.NDArray:
       exposure_s=exposure_s,
       f_number=f_number,
       iso=iso,
-      raw_image=raw_image,
-      bw_image=green_image)
+      raw_image=None,
+      bw_image=None)
+
+
+def read_image(filepath: str) -> RawImage:
+  image = read_attributes(filepath)
+
+  # Read raw image.
+  with rawpy.imread(filepath) as raw:
+    raw_image = np.copy(raw.raw_image)
+
+  # Use (0, 0) Bayer subimage (green) as our black and white image.
+  green_image = raw_image[::2, ::2]
+
+  image.raw_image = raw_image
+  image.bw_image = green_image
+  return image

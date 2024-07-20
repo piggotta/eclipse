@@ -7,14 +7,13 @@ import numpy as np
 import exifread
 import rawpy
 
+import constants
 import image_loader
-
-PHOTO_PATH = 'photos'
 
 def print_image_params(index: int) -> image_loader.RawImage:
   filename = f'IMG_{index:04d}.CR2'
-  filepath = os.path.join(PHOTO_PATH, filename)
-  image = image_loader.load_image(filepath)
+  filepath = os.path.join(constants.PHOTOS_PATH, filename)
+  image = image_loader.read_image(filepath)
 
   print(filename)
   print('  Index:', image.index)
