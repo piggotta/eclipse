@@ -1,6 +1,3 @@
-
-import matplotlib.pyplot as plt
-
 import dataclasses
 import glob
 import json
@@ -53,7 +50,7 @@ def _preprocess_image(image: image_loader.RawImage,
   # Generate a soft thresholded image of the sun.
   delta = 0.1 * (sun_mean - black_mean)
   threshold = black_mean + 3 * delta
-  is_sun = np.tanh((image.bw_image  - threshold) / delta)
+  is_sun = 0.5 * (1 + np.tanh((image.bw_image  - threshold) / delta))
 
   # Determine rectangular subset of image containing sun.
   offset = [500, 1000]
@@ -61,7 +58,7 @@ def _preprocess_image(image: image_loader.RawImage,
   cols = np.arange(image.bw_image.shape[1])
   rows, cols = np.meshgrid(rows, cols, indexing='ij')
 
-  sun_mask = is_sun > 0.5
+  sun_mask = is_sun > 0.2
   min_row = np.quantile(rows[sun_mask], 0.1)
   max_row = np.quantile(rows[sun_mask], 0.9)
   min_col = np.quantile(cols[sun_mask], 0.1)
