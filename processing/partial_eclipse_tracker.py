@@ -53,7 +53,7 @@ def _preprocess_image(image: image_loader.RawImage,
     sun_mean = black_mean + 600
 
   # Generate a soft thresholded image of the sun.
-  delta = 0.2 * (sun_mean - black_mean)
+  delta = 0.1 * (sun_mean - black_mean)
   threshold = black_mean + 3 * delta
   is_sun = 0.5 * (1 + np.tanh((image.bw_image  - threshold) / delta))
 
