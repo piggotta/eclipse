@@ -1,3 +1,5 @@
+import matplotlib.pyplot as plt
+
 import dataclasses
 import glob
 import json
@@ -6,8 +8,10 @@ import os
 import cattrs
 import numpy as np
 import numpy.typing as npt
+from scipy import optimize
 
 import constants
+import drawing
 import image_loader
 
 
@@ -29,6 +33,7 @@ class PreprocessedImage:
   metadata: ImageMetadata
   cropped_image: npt.NDArray
   is_sun: npt.NDArray
+
 
 def _preprocess_image(image: image_loader.RawImage,
                       cropped_shape: tuple[int, int]
@@ -110,6 +115,47 @@ def is_partial_eclipse(image: image_loader.RawImage):
   return True
 
 
+@dataclasses.dataclass
+class PartialEclipseTrack:
+  sun_radius: float
+  moon_radius: float
+  unix_time_s: list[float]
+  sun_centers: list[tuple[float, float]]
+
+  # Moon position is relative to sun.
+  moon_start_time_s: float
+  moon_r0: float
+  moon_c0: float
+  moon_dr_dt: float
+  moon_dc_dt: float
+  moon_dr2_dt2: float
+  moon_dc2_dt2: float
+
+
+def _draw_partial_eclipses(image_shape: tuple[int, int],
+                           track: PartialEclipseTrack) -> npt.NDArray:
+  images = np.zeros((len(track.unix_time_s), *image_shape))
+  for ind, time_s in enumerate(track.unix_time_s):
+    # Draw sun in each frame.
+    sun_center = track.sun_centers[ind]
+    sun_image = drawing.draw_circle(image_shape, sun_center, track.sun_radius)
+
+    # Draw moon in each frame.
+    t = time_s - track.moon_start_time_s
+    moon_center = (
+        track.moon_r0 + t * track.moon_dr_dt + t**2 * track.moon_dr2_dt2,
+        track.moon_c0 + t * track.moon_dc_dt + t**2 * track.moon_dc2_dt2,
+    )
+    moon_image = drawing.draw_circle(image_shape,
+                                     moon_center,
+                                     track.moon_radius
+    )
+
+    # Use moon image as mask for sun image.
+    images[ind, :, :] = sun_image * (1 - moon_image)
+
+  return images
+
 
 class PartialEclipseTracker:
 
@@ -175,7 +221,6 @@ class PartialEclipseTracker:
       del image
       del result
 
-
   def save_preprocess_to_file(self, filename: str):
     dicts = [cattrs.unstructure(m) for m in self.image_metadata]
     with open(self._metadata_filepath(filename), 'w') as f:
@@ -193,3 +238,89 @@ class PartialEclipseTracker:
     data = np.load(self._image_npz_filepath(filename))
     self.cropped_images = data['cropped_images']
     self.is_sun = data['is_sun']
+
+  def fit_sun_radius(self) -> float:
+    photo_indices = np.asarray([entry.index for entry in self.image_metadata])
+    mask = np.logical_or(
+        photo_indices < constants.IND_FIRST_PARTIAL - 1,
+        photo_indices > constants.IND_LAST_PARTIAL + 1)
+    full_sun_images = self.is_sun[mask, :, :]
+    print(full_sun_images.shape)
+
+    num_images = full_sun_images.shape[0]
+    image_shape = self.is_sun.shape[1:]
+
+    def images(x):
+      sun_radius = x[0]
+      center_row = x[1:num_images + 1]
+      center_col = x[num_images + 1:]
+      sun_centers = [(center_row[ind], center_col[ind]) for ind in
+                     range(num_images)]
+
+      track = PartialEclipseTrack(
+          sun_radius=sun_radius,
+          moon_radius=1,
+          unix_time_s=np.zeros(num_images),
+          sun_centers=sun_centers,
+          moon_start_time_s=0,
+          moon_r0=-10,
+          moon_c0=-10,
+          moon_dr_dt=0,
+          moon_dc_dt=0,
+          moon_dr2_dt2=0,
+          moon_dc2_dt2=0,
+      )
+      return _draw_partial_eclipses(image_shape, track)
+
+    def f_per_image(x):
+      delta = (images(x) - full_sun_images)**2
+      return np.sum(np.sum(delta, axis=2), axis=1) / np.prod(full_sun_images.shape)
+
+    def f(x):
+      return np.sum(f_per_image(x))
+
+    def df_dx(x):
+      f_per_image_x = f_per_image(x)
+      f_x = np.sum(f_per_image_x)
+
+      delta_r = 1e-2
+      delta_x = np.zeros(x.shape, dtype=float)
+      delta_x[0] = delta_r
+      df_dr = (f(x + delta_x) - f_x) / delta_r
+
+      delta_cr = 1e-2
+      delta_x = np.zeros(x.shape, dtype=float)
+      delta_x[1:num_images + 1] = delta_cr
+      df_dcr = (f_per_image(x + delta_x) - f_per_image_x) / delta_cr
+
+      delta_cc = 1e-2
+      delta_x = np.zeros(x.shape, dtype=float)
+      delta_x[num_images + 1:] = delta_cc
+      df_dcc = (f_per_image(x + delta_x) - f_per_image_x) / delta_cc
+
+      return np.concatenate(((df_dr,), df_dcr, df_dcc))
+
+    x0 = np.concatenate(((100,),
+                         250 * np.ones(num_images),
+                         250 * np.ones(num_images)))
+
+    res = optimize.minimize(f, x0, jac=df_dx, method='L-BFGS-B',
+                            options={'disp': True})
+    print(res)
+
+    sun_radius = res.x[0]
+    print(f'Sun radius: {sun_radius}')
+
+    plt.figure()
+    plt.imshow(full_sun_images[0, :, :])
+    plt.title('Real')
+
+    plt.figure()
+    plt.imshow(images(res.x)[0, :, :])
+    plt.title('Fit')
+    plt.show()
+
+    return sun_radius
+
+  def track_sun_and_moon(self) -> PartialEclipseTrack:
+    pass

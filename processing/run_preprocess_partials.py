@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 
 import partial_eclipse_tracker
 
-if __name__ == '__main__':
+def main():
   tracker = partial_eclipse_tracker.PartialEclipseTracker()
   #tracker.preprocess_images(max_images=3)
   tracker.preprocess_images()
@@ -12,3 +12,5 @@ if __name__ == '__main__':
   new_tracker.load_preprocess_from_file('preprocess_partials')
 
   plt.show()
+
+if __name__ == '__main__':
