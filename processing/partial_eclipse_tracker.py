@@ -9,6 +9,7 @@ import cattrs
 import numpy as np
 import numpy.typing as npt
 from scipy import optimize
+from scipy import signal
 
 import constants
 import drawing
@@ -123,7 +124,7 @@ class PartialEclipseTrack:
   sun_centers: list[tuple[float, float]]
 
   # Moon position is relative to sun.
-  moon_start_time_s: float
+  moon_zero_time_s: float
   moon_r0: float
   moon_c0: float
   moon_dr_dt: float
@@ -141,14 +142,15 @@ def _draw_partial_eclipses(image_shape: tuple[int, int],
     sun_image = drawing.draw_circle(image_shape, sun_center, track.sun_radius)
 
     # Draw moon in each frame.
-    t = time_s - track.moon_start_time_s
+    t = time_s - track.moon_zero_time_s
     moon_center = (
         track.moon_r0 + t * track.moon_dr_dt + t**2 * track.moon_dr2_dt2,
         track.moon_c0 + t * track.moon_dc_dt + t**2 * track.moon_dc2_dt2,
     )
-    moon_image = drawing.draw_circle(image_shape,
-                                     moon_center,
-                                     track.moon_radius
+    moon_image = drawing.draw_circle(
+        image_shape,
+        tuple(np.asarray(moon_center) + np.asarray(sun_center)),
+        track.moon_radius
     )
 
     # Use moon image as mask for sun image.
@@ -157,9 +159,43 @@ def _draw_partial_eclipses(image_shape: tuple[int, int],
   return images
 
 
+def _align_with_cross_correlation(image_orig, image_new
+                                  ) -> tuple[float, float]:
+  corr = signal.correlate(image_orig, image_new, method='fft')
+  opt_coord = np.asarray(np.unravel_index(np.argmax(corr), corr.shape))
+  center_coord = np.asarray(corr.shape) // 2
+  return tuple(opt_coord - center_coord)
+
+
+def _plot_image_diff(image_orig, image_new):
+  fig, ax = plt.subplots(1, 2, layout='constrained', figsize=(2 * 6.4, 4.8))
+
+  pcm = ax[0].imshow(image_orig, cmap='gray')
+  fig.colorbar(pcm, ax=ax[0])
+  ax[0].set_title('Original')
+
+  delta = image_new - image_orig
+  delta_lim = np.max(np.abs(delta))
+  pcm = ax[1].imshow(delta, vmin=-delta_lim, vmax=delta_lim, cmap='seismic')
+  fig.colorbar(pcm, ax=ax[1])
+  ax[1].set_title('Difference')
+
+
+@dataclasses.dataclass
+class PartialEclipseTrackerOptions:
+  guess_sun_radius: float = 0
+  guess_moon_dr_dt: float = 0
+  guess_moon_dc_dt: float = 0
+
+  show_plots: bool = True
+  verbose: bool = True
+  decimate_for_debug: bool = False
+
+
 class PartialEclipseTracker:
 
-  def __init__(self):
+  def __init__(self, options: PartialEclipseTrackerOptions):
+    self.options = options
     self.image_metadata = []
     self.cropped_images = None
     self.is_sun = None
@@ -169,7 +205,6 @@ class PartialEclipseTracker:
 
   def _image_npz_filepath(self, filename):
     return os.path.join(constants.OUTPUTS_PATH, filename + '.npz')
-
 
   def preprocess_images(self,
                         cropped_shape: tuple[int, int] = (500, 500),
@@ -239,13 +274,22 @@ class PartialEclipseTracker:
     self.cropped_images = data['cropped_images']
     self.is_sun = data['is_sun']
 
+  def approx_total_eclipse_start_unix_time_s(self) -> float:
+    photo_indices = np.asarray([entry.index for entry in self.image_metadata])
+    ind = np.argmin(np.abs(photo_indices - constants.IND_FIRST_TOTAL))
+    return self.image_metadata[ind].unix_time_s
+
+  def approx_total_eclipse_end_unix_time_s(self) -> float:
+    photo_indices = np.asarray([entry.index for entry in self.image_metadata])
+    ind = np.argmin(np.abs(photo_indices - constants.IND_LAST_TOTAL))
+    return self.image_metadata[ind].unix_time_s
+
   def fit_sun_radius(self) -> float:
     photo_indices = np.asarray([entry.index for entry in self.image_metadata])
     mask = np.logical_or(
         photo_indices < constants.IND_FIRST_PARTIAL - 1,
         photo_indices > constants.IND_LAST_PARTIAL + 1)
     full_sun_images = self.is_sun[mask, :, :]
-    print(full_sun_images.shape)
 
     num_images = full_sun_images.shape[0]
     image_shape = self.is_sun.shape[1:]
@@ -262,9 +306,9 @@ class PartialEclipseTracker:
           moon_radius=1,
           unix_time_s=np.zeros(num_images),
           sun_centers=sun_centers,
-          moon_start_time_s=0,
-          moon_r0=-10,
-          moon_c0=-10,
+          moon_zero_time_s=0,
+          moon_r0=-1e4,
+          moon_c0=-1e4,
           moon_dr_dt=0,
           moon_dc_dt=0,
           moon_dr2_dt2=0,
@@ -300,27 +344,135 @@ class PartialEclipseTracker:
 
       return np.concatenate(((df_dr,), df_dcr, df_dcc))
 
-    x0 = np.concatenate(((100,),
-                         250 * np.ones(num_images),
-                         250 * np.ones(num_images)))
+    x0 = np.concatenate(((self.options.guess_sun_radius,),
+                         (image_shape[0] // 2) * np.ones(num_images),
+                         (image_shape[1] // 2) * np.ones(num_images)))
 
     res = optimize.minimize(f, x0, jac=df_dx, method='L-BFGS-B',
-                            options={'disp': True})
-    print(res)
-
+                            options={'disp': self.options.verbose})
     sun_radius = res.x[0]
-    print(f'Sun radius: {sun_radius}')
 
-    plt.figure()
-    plt.imshow(full_sun_images[0, :, :])
-    plt.title('Real')
-
-    plt.figure()
-    plt.imshow(images(res.x)[0, :, :])
-    plt.title('Fit')
-    plt.show()
+    if self.options.show_plots:
+      ind = 0
+      _plot_image_diff(full_sun_images[ind, :, :], images(res.x)[ind, :, :])
+      plt.suptitle(f'IMG_{photo_indices[ind]}', fontsize=16)
 
     return sun_radius
 
   def track_sun_and_moon(self) -> PartialEclipseTrack:
-    pass
+    is_sun = self.is_sun
+    unix_time_s = [entry.unix_time_s for entry in self.image_metadata]
+    photo_indices = [entry.index for entry in self.image_metadata]
+
+    if self.options.decimate_for_debug:
+      stride = 20
+      is_sun = self.is_sun[::stride, :, :]
+      unix_time_s = unix_time_s[::stride]
+      photo_indices = photo_indices[::stride]
+
+    num_images = is_sun.shape[0]
+    image_shape = is_sun.shape[1:]
+
+    # Determine fixed parameters.
+    sun_radius = self.fit_sun_radius()
+    moon_zero_time_s = 0.5 * (
+        self.approx_total_eclipse_start_unix_time_s() +
+        self.approx_total_eclipse_end_unix_time_s())
+
+    def track(x):
+      center_row = x[7:num_images + 7]
+      center_col = x[num_images + 7:]
+      sun_centers = [(center_row[ind], center_col[ind]) for ind in
+                     range(num_images)]
+
+      return PartialEclipseTrack(
+          sun_radius=sun_radius,
+          moon_radius=x[0],
+          unix_time_s=unix_time_s,
+          sun_centers=sun_centers,
+          moon_zero_time_s=moon_zero_time_s,
+          moon_r0=x[1],
+          moon_c0=x[2],
+          moon_dr_dt=x[3],
+          moon_dc_dt=x[4],
+          moon_dr2_dt2=0 * x[5],
+          moon_dc2_dt2=0 * x[6],
+      )
+
+    def images(x):
+      return _draw_partial_eclipses(image_shape, track(x))
+
+    def f_per_image(x):
+      delta = (images(x) - is_sun)**2
+      return np.sum(np.sum(delta, axis=2), axis=1) / np.prod(is_sun.shape)
+
+    def f(x):
+      return np.sum(f_per_image(x))
+
+    def df_dx(x):
+      f_per_image_x = f_per_image(x)
+      f_x = np.sum(f_per_image_x)
+
+      df_dp = np.zeros(7)
+      delta_per_global_param = (1e-2, 1e-2, 1e-2, 1e-6, 1e-6, 1e-8, 1e-8)
+      for ind, delta in enumerate(delta_per_global_param):
+        delta_x = np.zeros(x.shape, dtype=float)
+        delta_x[ind] = delta
+        df_dp[ind] = (f(x + delta_x) - f_x) / delta
+
+      delta_cr = 1e-2
+      delta_x = np.zeros(x.shape, dtype=float)
+      delta_x[1:num_images + 1] = delta_cr
+      df_dcr = (f_per_image(x + delta_x) - f_per_image_x) / delta_cr
+
+      delta_cc = 1e-2
+      delta_x = np.zeros(x.shape, dtype=float)
+      delta_x[num_images + 1:] = delta_cc
+      df_dcc = (f_per_image(x + delta_x) - f_per_image_x) / delta_cc
+
+      return np.concatenate((df_dp, df_dcr, df_dcc))
+
+    # Initial guess for global parameters.
+    guess_global_params = (sun_radius,
+                           0,
+                           0,
+                           self.options.guess_moon_dr_dt,
+                           self.options.guess_moon_dc_dt,
+                           0,
+                           0)
+
+    # Align each image using cross-correlation to generate starting guess.
+    sun_centers_r = (image_shape[0] // 2) * np.ones(num_images)
+    sun_centers_c = (image_shape[1] // 2) * np.ones(num_images)
+    x0 = np.concatenate((guess_global_params,
+                         sun_centers_r,
+                         sun_centers_c))
+    initial_images = images(x0)
+
+    for ind in range(num_images):
+      offsets = _align_with_cross_correlation(is_sun[ind, :, :],
+                                              initial_images[ind, :, :])
+      sun_centers_r[ind] += offsets[0]
+      sun_centers_c[ind] += offsets[1]
+    x1 = np.concatenate((guess_global_params,
+                         sun_centers_r,
+                         sun_centers_c))
+
+    if False:
+      for ind in range(num_images):
+        _plot_image_diff(is_sun[ind, :, :], images(x1)[ind, :, :])
+        plt.suptitle(f'IMG_{photo_indices[ind]}', fontsize=16)
+      return
+
+    res = optimize.minimize(f, x1, jac=df_dx,
+                            method='L-BFGS-B',
+                            #method='BFGS',
+                            options={'disp': self.options.verbose})
+    print(res.x[:7])
+
+    if self.options.show_plots:
+      for ind in range(num_images):
+        _plot_image_diff(is_sun[ind, :, :], images(res.x)[ind, :, :])
+        plt.suptitle(f'IMG_{photo_indices[ind]}', fontsize=16)
+
+    return track(res.x)
