@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 
+import copy
 import dataclasses
 import glob
 import json
@@ -118,9 +119,10 @@ def is_partial_eclipse(image: image_loader.RawImage):
 
 @dataclasses.dataclass
 class PartialEclipseTrack:
+  unix_time_s: list[float]
+
   sun_radius: float
   moon_radius: float
-  unix_time_s: list[float]
   sun_centers: list[tuple[float, float]]
 
   # Moon position is relative to sun.
@@ -129,8 +131,8 @@ class PartialEclipseTrack:
   moon_c0: float
   moon_dr_dt: float
   moon_dc_dt: float
-  moon_dr2_dt2: float
-  moon_dc2_dt2: float
+  moon_d2r_dt2: float
+  moon_d2c_dt2: float
 
 
 def _draw_partial_eclipses(image_shape: tuple[int, int],
@@ -144,8 +146,8 @@ def _draw_partial_eclipses(image_shape: tuple[int, int],
     # Draw moon in each frame.
     t = time_s - track.moon_zero_time_s
     moon_center = (
-        track.moon_r0 + t * track.moon_dr_dt + t**2 * track.moon_dr2_dt2,
-        track.moon_c0 + t * track.moon_dc_dt + t**2 * track.moon_dc2_dt2,
+        track.moon_r0 + t * track.moon_dr_dt + t**2 * track.moon_d2r_dt2,
+        track.moon_c0 + t * track.moon_dc_dt + t**2 * track.moon_d2c_dt2,
     )
     moon_image = drawing.draw_circle(
         image_shape,
@@ -284,80 +286,170 @@ class PartialEclipseTracker:
     ind = np.argmin(np.abs(photo_indices - constants.IND_LAST_TOTAL))
     return self.image_metadata[ind].unix_time_s
 
-  def fit_sun_radius(self) -> float:
+  def optimize_track(self,
+                     initial_track: PartialEclipseTrack,
+                     params_to_fit: list[str],
+                     image_mask: npt.NDArray | None = None
+                     ) -> PartialEclipseTrack:
+    # Select subset of images to fit.
+    is_sun = self.is_sun
+    unix_time_s = np.asarray([entry.unix_time_s for entry in self.image_metadata])
     photo_indices = np.asarray([entry.index for entry in self.image_metadata])
-    mask = np.logical_or(
-        photo_indices < constants.IND_FIRST_PARTIAL - 1,
-        photo_indices > constants.IND_LAST_PARTIAL + 1)
-    full_sun_images = self.is_sun[mask, :, :]
+    if image_mask is not None:
+      is_sun = is_sun[image_mask, :, :]
+      unix_time_s = unix_time_s[image_mask]
+      photo_indices = photo_indices[image_mask]
 
-    num_images = full_sun_images.shape[0]
-    image_shape = self.is_sun.shape[1:]
+    if len(initial_track.sun_centers) != is_sun.shape[0]:
+      raise ValueError('Number of provided sun_centers does not match number '
+                       'of images to optimize over.')
+
+    num_images = is_sun.shape[0]
+    image_shape = is_sun.shape[1:]
+
+    # Order in which we store global parameters in our state vector x.
+    all_global_params = [
+        'sun_radius',
+        'moon_radius',
+        'moon_r0',
+        'moon_c0',
+        'moon_dr_dt',
+        'moon_dc_dt',
+        'moon_d2r_dt2',
+        'moon_d2c_dt2',
+    ]
+
+    # Determine which parameters to optimize over.
+    for param in params_to_fit:
+      if param not in all_global_params and param != 'sun_centers':
+        raise ValueError(f'Unexpected parameter to fit: {param}')
+
+    global_params = []
+    for param in all_global_params:
+      if param in params_to_fit:
+        global_params.append(param)
+
+    if 'sun_centers' in params_to_fit:
+      fit_sun_centers = True
+    else:
+      fit_sun_centers = False
+
+    def track(x):
+      current_track = copy.deepcopy(initial_track)
+      for ind, param in enumerate(global_params):
+        setattr(current_track, param, x[ind])
+
+      if fit_sun_centers:
+        center_row = x[len(global_params):len(global_params) + num_images]
+        center_col = x[len(global_params) + num_images:]
+        current_track.sun_centers = [(center_row[ind], center_col[ind])
+                                       for ind in range(num_images)]
+      return current_track
 
     def images(x):
-      sun_radius = x[0]
-      center_row = x[1:num_images + 1]
-      center_col = x[num_images + 1:]
-      sun_centers = [(center_row[ind], center_col[ind]) for ind in
-                     range(num_images)]
-
-      track = PartialEclipseTrack(
-          sun_radius=sun_radius,
-          moon_radius=1,
-          unix_time_s=np.zeros(num_images),
-          sun_centers=sun_centers,
-          moon_zero_time_s=0,
-          moon_r0=-1e4,
-          moon_c0=-1e4,
-          moon_dr_dt=0,
-          moon_dc_dt=0,
-          moon_dr2_dt2=0,
-          moon_dc2_dt2=0,
-      )
-      return _draw_partial_eclipses(image_shape, track)
+      return _draw_partial_eclipses(image_shape, track(x))
 
     def f_per_image(x):
-      delta = (images(x) - full_sun_images)**2
-      return np.sum(np.sum(delta, axis=2), axis=1) / np.prod(full_sun_images.shape)
+      delta = (images(x) - is_sun)**2
+      return np.sum(np.sum(delta, axis=2), axis=1) / np.prod(is_sun.shape)
 
     def f(x):
       return np.sum(f_per_image(x))
 
     def df_dx(x):
+      all_df_dx = []
+
       f_per_image_x = f_per_image(x)
       f_x = np.sum(f_per_image_x)
 
-      delta_r = 1e-2
-      delta_x = np.zeros(x.shape, dtype=float)
-      delta_x[0] = delta_r
-      df_dr = (f(x + delta_x) - f_x) / delta_r
+      delta_per_global_param = {
+        'sun_radius': 1e-2,
+        'moon_radius': 1e-2,
+        'sun_centers': 1e-2,
+        'moon_r0': 1e-2,
+        'moon_c0': 1e-2,
+        'moon_dr_dt': 1e-6,
+        'moon_dc_dt': 1e-6,
+        'moon_d2r_dt2': 1e-9,
+        'moon_d2c_dt2': 1e-9,
+      }
 
-      delta_cr = 1e-2
-      delta_x = np.zeros(x.shape, dtype=float)
-      delta_x[1:num_images + 1] = delta_cr
-      df_dcr = (f_per_image(x + delta_x) - f_per_image_x) / delta_cr
+      for ind, param in enumerate(global_params):
+        delta = delta_per_global_param[param]
+        delta_x = np.zeros(x.shape, dtype=float)
+        delta_x[ind] = delta
+        df_dp = (f(x + delta_x) - f_x) / delta
+        all_df_dx.append([df_dp])
 
-      delta_cc = 1e-2
-      delta_x = np.zeros(x.shape, dtype=float)
-      delta_x[num_images + 1:] = delta_cc
-      df_dcc = (f_per_image(x + delta_x) - f_per_image_x) / delta_cc
+      if fit_sun_centers:
+        delta_cr = 1e-2
+        delta_x = np.zeros(x.shape, dtype=float)
+        delta_x[1:num_images + 1] = delta_cr
+        df_dcr = (f_per_image(x + delta_x) - f_per_image_x) / delta_cr
+        all_df_dx.append(df_dcr)
 
-      return np.concatenate(((df_dr,), df_dcr, df_dcc))
+        delta_cc = 1e-2
+        delta_x = np.zeros(x.shape, dtype=float)
+        delta_x[num_images + 1:] = delta_cc
+        df_dcc = (f_per_image(x + delta_x) - f_per_image_x) / delta_cc
+        all_df_dx.append(df_dcc)
 
-    x0 = np.concatenate(((self.options.guess_sun_radius,),
-                         (image_shape[0] // 2) * np.ones(num_images),
-                         (image_shape[1] // 2) * np.ones(num_images)))
+      return np.concatenate(all_df_dx)
 
-    res = optimize.minimize(f, x0, jac=df_dx, method='L-BFGS-B',
+    # Get initial starting point for state vector.
+    x0 = []
+    for param in global_params:
+      x0.append([getattr(initial_track, param)])
+
+    if fit_sun_centers:
+      center_row = [entry[0] for entry in initial_track.sun_centers]
+      center_col = [entry[1] for entry in initial_track.sun_centers]
+      x0 += [center_row, center_col]
+
+    x0 = np.concatenate(x0)
+
+    # Find optimal solution.
+    res = optimize.minimize(f, x0, jac=df_dx,
+                            method='L-BFGS-B',
                             options={'disp': self.options.verbose})
-    sun_radius = res.x[0]
 
     if self.options.show_plots:
-      ind = 0
-      _plot_image_diff(full_sun_images[ind, :, :], images(res.x)[ind, :, :])
-      plt.suptitle(f'IMG_{photo_indices[ind]}', fontsize=16)
+      for ind in range(num_images):
+        _plot_image_diff(is_sun[ind, :, :], images(res.x)[ind, :, :])
+        plt.suptitle(f'IMG_{photo_indices[ind]}', fontsize=16)
 
-    return sun_radius
+    return track(res.x)
+
+  def fit_sun_radius(self) -> float:
+    photo_indices = np.asarray([entry.index for entry in self.image_metadata])
+    mask = np.logical_or(
+        photo_indices < constants.IND_FIRST_PARTIAL - 1,
+        photo_indices > constants.IND_LAST_PARTIAL + 1)
+
+    num_images = np.sum(mask)
+    image_shape = self.is_sun.shape[1:]
+    sun_centers = [(image_shape[0] // 2, image_shape[1] // 2)] * num_images
+
+    initial_track = PartialEclipseTrack(
+        sun_radius=self.options.guess_sun_radius,
+        moon_radius=1,
+        unix_time_s=np.zeros(num_images),
+        sun_centers=sun_centers,
+        moon_zero_time_s=0,
+        moon_r0=-1e4,
+        moon_c0=-1e4,
+        moon_dr_dt=0,
+        moon_dc_dt=0,
+        moon_d2r_dt2=0,
+        moon_d2c_dt2=0,
+    )
+
+    track = self.optimize_track(
+        initial_track,
+        ['sun_radius', 'sun_centers'],
+        image_mask=mask
+    )
+    return track.sun_radius
 
   def track_sun_and_moon(self) -> PartialEclipseTrack:
     is_sun = self.is_sun
@@ -395,8 +487,8 @@ class PartialEclipseTracker:
           moon_c0=x[2],
           moon_dr_dt=x[3],
           moon_dc_dt=x[4],
-          moon_dr2_dt2=0 * x[5],
-          moon_dc2_dt2=0 * x[6],
+          moon_d2r_dt2=0 * x[5],
+          moon_d2c_dt2=0 * x[6],
       )
 
     def images(x):
@@ -476,3 +568,6 @@ class PartialEclipseTracker:
         plt.suptitle(f'IMG_{photo_indices[ind]}', fontsize=16)
 
     return track(res.x)
+
+
+
