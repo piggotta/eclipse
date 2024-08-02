@@ -18,8 +18,10 @@ def main():
   )
   tracker = partial_eclipse_tracker.PartialEclipseTracker(options)
   tracker.load_preprocess_from_file('preprocess_partials')
-  #tracker.track_sun_and_moon()
-  tracker.fit_sun_radius()
+  #tracker.fit_sun_radius()
+  track = tracker.track_sun_and_moon()
+
+  print(track)
   plt.show()
   return
 
