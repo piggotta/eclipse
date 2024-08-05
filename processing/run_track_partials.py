@@ -23,7 +23,7 @@ def main():
 
   # Print tracking results.
   print_track = copy.copy(track)
-  print_track.is_sun = None
+  print_track.sun_centers = None
   print_track.unix_time_s = None
   print('Final track:')
   print(print_track)
