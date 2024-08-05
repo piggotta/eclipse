@@ -142,7 +142,7 @@ def _metadata_filepath(filename):
 def save_track(filename: str, track: PartialEclipseTrack):
   serialized = cattrs.unstructure(track)
   with open(_metadata_filepath(filename), 'w') as f:
-    f.write(json.dumps(dicts))
+    f.write(json.dumps(serialized))
 
 
 def load_track(filename: str) -> PartialEclipseTrack:
