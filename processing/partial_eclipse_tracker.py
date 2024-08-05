@@ -4,6 +4,7 @@ import dataclasses
 import glob
 import json
 import os
+import time
 
 import cattrs
 import matplotlib.pyplot as plt
@@ -119,11 +120,11 @@ def is_partial_eclipse(image: image_loader.RawImage):
 
 @dataclasses.dataclass
 class PartialEclipseTrack:
-  unix_time_s: list[float]
+  unix_time_s: list[float] | None
 
   sun_radius: float
   moon_radius: float
-  sun_centers: list[tuple[float, float]]
+  sun_centers: list[tuple[float, float]] | None
 
   # Moon position is relative to sun.
   moon_zero_time_s: float
@@ -133,6 +134,21 @@ class PartialEclipseTrack:
   moon_dc_dt: float
   moon_d2r_dt2: float
   moon_d2c_dt2: float
+
+def _metadata_filepath(filename):
+  return os.path.join(constants.OUTPUTS_PATH, filename + '.cattr')
+
+
+def save_track(filename: str, track: PartialEclipseTrack):
+  serialized = cattrs.unstructure(track)
+  with open(_metadata_filepath(filename), 'w') as f:
+    f.write(json.dumps(dicts))
+
+
+def load_track(filename: str) -> PartialEclipseTrack:
+  with open(_metadata_filepath(filename), 'r') as f:
+    serialized = json.loads(f.read())
+  return cattrs.structure(serialized, PartialEclipseTrack)
 
 
 def _draw_partial_eclipses(image_shape: tuple[int, int],
@@ -189,10 +205,6 @@ class PartialEclipseTrackerOptions:
   guess_moon_dr_dt: float = 0
   guess_moon_dc_dt: float = 0
 
-  show_plots: bool = True
-  verbose: bool = True
-  decimate_for_debug: bool = False
-
 
 class PartialEclipseTracker:
 
@@ -202,8 +214,6 @@ class PartialEclipseTracker:
     self.cropped_images = None
     self.is_sun = None
 
-  def _metadata_filepath(self, filename):
-    return os.path.join(constants.OUTPUTS_PATH, filename + '.cattr')
 
   def _image_npz_filepath(self, filename):
     return os.path.join(constants.OUTPUTS_PATH, filename + '.npz')
@@ -260,7 +270,7 @@ class PartialEclipseTracker:
 
   def save_preprocess_to_file(self, filename: str):
     dicts = [cattrs.unstructure(m) for m in self.image_metadata]
-    with open(self._metadata_filepath(filename), 'w') as f:
+    with open(_metadata_filepath(filename), 'w') as f:
       f.write(json.dumps(dicts))
 
     np.savez(self._image_npz_filepath(filename),
@@ -268,7 +278,7 @@ class PartialEclipseTracker:
              is_sun=self.is_sun)
 
   def load_preprocess_from_file(self, filename: str):
-    with open(self._metadata_filepath(filename), 'r') as f:
+    with open(_metadata_filepath(filename), 'r') as f:
       dicts = json.loads(f.read())
     self.image_metadata = [cattrs.structure(d, ImageMetadata) for d in dicts]
 
@@ -317,12 +327,15 @@ class PartialEclipseTracker:
   def optimize_track(self,
                      initial_track: PartialEclipseTrack,
                      params_to_fit: list[str],
-                     image_mask: npt.NDArray
+                     image_mask: npt.NDArray,
+                     method: str = 'L-BFGS-B',
+                     verbose: bool = False
                      ) -> PartialEclipseTrack:
-    print('Optimizing track...')
-    print('  Variables: ' + ', '.join(params_to_fit))
-    print(f'  Number of images: {self.is_sun[image_mask, :, :].shape[0]}')
-    print()
+    if verbose:
+      print('Optimizing track...')
+      print('  Variables: ' + ', '.join(params_to_fit))
+      print(f'  Number of images: {self.is_sun[image_mask, :, :].shape[0]}')
+      print()
 
     # Select subset of images to fit.
     unix_time_s = np.asarray([entry.unix_time_s for entry in self.image_metadata])
@@ -416,13 +429,13 @@ class PartialEclipseTracker:
       if fit_sun_centers:
         delta_cr = 1e-2
         delta_x = np.zeros(x.shape, dtype=float)
-        delta_x[1:num_images + 1] = delta_cr
+        delta_x[len(global_params):num_images + len(global_params)] = delta_cr
         df_dcr = (f_per_image(x + delta_x) - f_per_image_x) / delta_cr
         all_df_dx.append(df_dcr)
 
         delta_cc = 1e-2
         delta_x = np.zeros(x.shape, dtype=float)
-        delta_x[num_images + 1:] = delta_cc
+        delta_x[num_images + len(global_params):] = delta_cc
         df_dcc = (f_per_image(x + delta_x) - f_per_image_x) / delta_cc
         all_df_dx.append(df_dcc)
 
@@ -437,16 +450,82 @@ class PartialEclipseTracker:
       center_row = [entry[0] for entry in initial_track.sun_centers]
       center_col = [entry[1] for entry in initial_track.sun_centers]
       x0 += [center_row, center_col]
-
     x0 = np.concatenate(x0)
 
     # Find optimal solution.
+    start_time_s = time.time()
     res = optimize.minimize(f, x0, jac=df_dx,
-                            method='L-BFGS-B',
-                            options={'disp': self.options.verbose})
+                            method=method,
+                            options={'disp': verbose})
+    elapsed_time_s = time.time() - start_time_s
 
-    print()
+    # Print initial and final function values.
+    if verbose:
+      print(f'Initial f(x): {f(x0):e}')
+      print(f'Final f(x): {res.fun:e}')
+      print(f'Elapsed time: {elapsed_time_s:.3f} s')
+      print()
+
     return track(res.x)
+
+  def align_images(self,
+                   initial_track: PartialEclipseTrack,
+                   image_mask: npt.NDArray,
+                   ) -> PartialEclipseTrack:
+    """Aligns images to the provided track.
+
+    If sun_centers is None, cross-correlations are used to provide the initial
+    guess for alignment. Otherwise, sun_centers is used as the initial guess.
+    """
+    track = copy.deepcopy(initial_track)
+
+    num_images = self.is_sun.shape[0]
+    image_shape = self.is_sun.shape[1:]
+    indices = np.arange(num_images)[image_mask]
+
+    unix_time_s = [entry.unix_time_s for entry in self.image_metadata]
+    track.unix_time_s = list(np.asarray(unix_time_s)[image_mask])
+
+    if track.sun_centers is None:
+      track.sun_centers = [(image_shape[0] // 2, image_shape[1] // 2)
+                           ] * len(indices)
+      initial_images = _draw_partial_eclipses(image_shape, track)
+
+      print('Aligning images with cross-correlations...')
+      for ind, global_ind in enumerate(indices):
+        print(f'  {ind} / {len(indices)}')
+        offset = _align_with_cross_correlation(
+            self.is_sun[global_ind, :, :],
+            initial_images[ind, :, :]
+        )
+        track.sun_centers[ind] = tuple(
+            np.asarray(track.sun_centers[ind]) + np.asarray(offset)
+        )
+      print()
+
+    if len(track.sun_centers) != len(track.unix_time_s):
+      raise ValueError('Number of sun_centers entries should be equal to the '
+                       'number of images selected by image_mask.')
+
+    print('Optimizing image alignment...')
+    for ind, global_ind in enumerate(indices):
+      print(f'  {ind} / {len(indices)}')
+
+      current_track = copy.copy(track)
+      current_track.unix_time_s = [track.unix_time_s[ind]]
+      current_track.sun_centers = [track.sun_centers[ind]]
+
+      current_track = self.optimize_track(
+          current_track,
+          ['sun_centers'],
+          image_mask=[global_ind],
+          method='L-BFGS-B',
+      )
+
+      track.sun_centers[ind] = current_track.sun_centers[0]
+    print()
+
+    return track
 
   def fit_sun_radius(self) -> float:
     photo_indices = np.asarray([entry.index for entry in self.image_metadata])
@@ -478,7 +557,8 @@ class PartialEclipseTracker:
     track = self.optimize_track(
         initial_track,
         ['sun_radius', 'sun_centers'],
-        image_mask=mask
+        image_mask=mask,
+        verbose=True,
     )
     self.plot_track(track, [0])
     return track.sun_radius
@@ -507,7 +587,7 @@ class PartialEclipseTracker:
 
     # Initial fit to small subset of images.
     indices = np.asarray(
-        np.linspace(0, self.is_sun.shape[0] - 1, 100), #15),
+        np.linspace(0, self.is_sun.shape[0] - 1, 60),
         dtype=int
     )
     mask = np.logical_or(
@@ -516,59 +596,44 @@ class PartialEclipseTracker:
     )
     indices = indices[mask]
 
-    sun_centers = [(image_shape[0] // 2, image_shape[1] // 2)] * len(indices)
+    track = PartialEclipseTrack(
+        sun_radius=sun_radius,
+        moon_radius=sun_radius,
+        unix_time_s=None,
+        sun_centers=None,
+        moon_zero_time_s=moon_zero_time_s,
+        moon_r0=0,
+        moon_c0=0,
+        moon_dr_dt=self.options.guess_moon_dr_dt,
+        moon_dc_dt=self.options.guess_moon_dc_dt,
+        moon_d2r_dt2=0,
+        moon_d2c_dt2=0,
+    )
 
-    initial_track = PartialEclipseTrack(
-          sun_radius=sun_radius,
-          moon_radius=sun_radius,
-          unix_time_s=list(unix_time_s[indices]),
-          sun_centers=sun_centers,
-          moon_zero_time_s=moon_zero_time_s,
-          moon_r0=0,
-          moon_c0=0,
-          moon_dr_dt=self.options.guess_moon_dr_dt,
-          moon_dc_dt=self.options.guess_moon_dc_dt,
-          moon_d2r_dt2=0,
-          moon_d2c_dt2=0,
-      )
-
-    initial_images = _draw_partial_eclipses(image_shape, initial_track)
-    sun_centers = []
-    for ind, global_ind in enumerate(np.arange(num_images)[indices]):
-      offset = _align_with_cross_correlation(
-          self.is_sun[global_ind, :, :],
-          initial_images[ind, :, :]
-      )
-      initial_track.sun_centers[ind] = tuple(
-          np.asarray(initial_track.sun_centers[ind]) + np.asarray(offset)
-      )
-    track = initial_track
-
-    for _ in range(3):
-      track = self.optimize_track(
-          track,
-          ['sun_centers'],
-          image_mask=indices
-      )
+    for _ in range(2):
+      track = self.align_images(track, indices)
 
       track = self.optimize_track(
           track,
           ['moon_radius', 'moon_r0', 'moon_c0', 'moon_dr_dt', 'moon_dc_dt'],
-          image_mask=indices
+          image_mask=indices,
+          method='BFGS',
+          verbose=True,
       )
+
+    for _ in range(2):
+      track = self.align_images(track, indices)
 
       track = self.optimize_track(
           track,
-          ['moon_radius'],
-          image_mask=indices
-      )
-      track = self.optimize_track(
-          track,
-          ['moon_radius', 'moon_r0', 'moon_c0', 'moon_dr_dt', 'moon_dc_dt'],
-          image_mask=indices
+          ['moon_radius', 'moon_r0', 'moon_c0', 'moon_dr_dt', 'moon_dc_dt',
+           'moon_d2r_dt2', 'moon_d2c_dt2'],
+          image_mask=indices,
+          method='BFGS',
+          verbose=True,
       )
 
-    self.plot_track(track, np.arange(len(indices))[::10])
-
+    # Fit image offset for each partial eclipse image.
+    track.sun_centers = None
+    track = self.align_images(track, np.arange(num_images))
     return track
-
