@@ -59,7 +59,7 @@ def _preprocess_image(image: image_loader.RawImage,
   # image of the sun.
   delta = sun_mean - black_mean
   black_level = black_mean + 0.1 * delta
-  white_level = sun_mean - 0.1 * delta
+  white_level = sun_mean - 0.4 * delta
   scaled = (image.bw_image - black_level) / (white_level - black_level)
   is_sun = np.minimum( np.maximum(scaled, 0), 1)
 
