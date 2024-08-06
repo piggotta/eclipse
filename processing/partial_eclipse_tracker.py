@@ -55,10 +55,13 @@ def _preprocess_image(image: image_loader.RawImage,
   else:
     sun_mean = black_mean + 600
 
-  # Generate a soft thresholded image of the sun.
-  delta = 0.1 * (sun_mean - black_mean)
-  threshold = black_mean + 3 * delta
-  is_sun = 0.5 * (1 + np.tanh((image.bw_image  - threshold) / delta))
+  # Adjust the white and black levels to generate a high-contrast greyscale
+  # image of the sun.
+  delta = sun_mean - black_mean
+  black_level = black_mean + 0.1 * delta
+  white_level = sun_mean - 0.1 * delta
+  scaled = (image.bw_image - black_level) / (white_level - black_level)
+  is_sun = np.minimum( np.maximum(scaled, 0), 1)
 
   # Determine rectangular subset of image containing sun.
   offset = [500, 1000]
@@ -581,7 +584,7 @@ class PartialEclipseTracker:
         self.approx_partial_eclipse_end_unix_time_s() -
         self.approx_partial_eclipse_start_unix_time_s()
     )
-    exclude_time_length_s = 0.2 * partial_eclipse_time_s
+    exclude_time_length_s = 0.1 * partial_eclipse_time_s
     exclude_time_start_s = moon_zero_time_s - exclude_time_length_s
     exclude_time_end_s = moon_zero_time_s + exclude_time_length_s
 
