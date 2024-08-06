@@ -44,4 +44,4 @@ def main(plot_only: bool = False):
 
 
 if __name__ == '__main__':
-  main(plot_only=True)
+  main(plot_only=False)
