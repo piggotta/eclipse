@@ -60,50 +60,51 @@ Partial eclipse tracking
     e. Repeat c, but over all images.
     f. Save tracking results to file.
 
-Total eclipse tracking
-  0. Load images with shortest exposure
-  1. Perform dumb, basic segmentation
+Raw image processing: EclipseImages class
+  0. Process black frames to get background and noise levels for each pixel.
+  1. Process partial eclipse photos to .npz files
+    a. Perform background subtraction and hot pixel removal
+    b. Scale image brightness using previous solar mean value information
+  2. Process total eclipse photos to .npz files
+    a. Perform background subtraction and hot pixel removal
+    b. Stack images to generate HDR images
+
+Total eclipse tracking: TotalEclipseTracker class
+  1. Perform simple thresholding and segmentation to get moon shape
      a. Apply manually selected (relatively high) threshold level.
      b. Fill outside of sun using floodfill.
-  2. Apply tanh thresholding, and combine with segmentation using
-       np.maximum(tanh_threshold_image, segmented_image)
   3. Fit to moon (not sun!) position only using L-BFGS, as before.
   4. Save tracking results to file.
 
-Partial eclipse: still frame generation
- 1. Load raw image from file.
- 2. Perform demosaicing.
- 3. Translate both raw image and threshold image.
- 4. <Correct for changes in brightness from clouds> ????
-    => Tricky since we also have to account for limb darkening
-    => Consider generating a "master" sun image, and using threshold image
-    to determine which pixels to compare.
- 5. Apply black level and white level correction.
- 6. Add local time to image.
- 7. Save cropped image to file.
+Total eclipse corona enhancement: EclipseImages class
+  1. Scale image by fixed function as a function of radius
+  2. Scale image to fit within standard color limits
+  3. Save to final .npz file
 
-Total eclipse: still frame
- 1. Load all raw images from file corresponding to a single "exposure".
-   Note: throw away highest exposure.
- 2. Perform HDR stacking using raw images directly.
-    => Probably not worth trying to adjust for image shift between shots.
-    => Keep an eye on HDR stacking algorithm to make sure we don't get bleeding
-      from higher-exposure shots into the black moon region.
- 3. Perform demosaicing using highest performance approach.
- 4. Save demosaiced image to .npz file.
- 5. Apply "HDR algorithm" to make image look pretty.
- 6. Add local time to image.
- 7. Save HDR image to file.
-
-Partial eclipse: missing frame reconstruction
- 1. Generate template for sun from sun-only shots.
- 2. Generate template for moon edge using strong partial eclipse shots.
- 3. Use tracking data to combine sun and moon-edge templates in correct
- location.
+Partial eclipse: missing frame reconstruction (initially skip)
+  1. Generate template for sun from sun-only shots.
+  2. Generate template for moon edge using strong partial eclipse shots.
+  3. Use tracking data to combine sun and moon-edge templates in correct
+     location.
 NOTE: if necessary, generate several sun and moon templates and randomly switch
 between them. Only bother doing this if the images look "too perfect".
- 4. Add local time to image.
- 5. Save image to file.
+  4. Add local time to image.
+  5. Save image to file.
+
+Still frame generation: EclipseImages class
+  0. Load .npz image from file
+  1. Perform demosaicing
+  2. Apply translation based on tracking info, and crop images
+  3. Save to .png file
+
+Frame interpolation
+  1. Use interpolation library to create in-between frames
+  2. Select subset of images to use in video
+    a. Video should smoothly slow down for total eclipse
+
+Video generation
+  1. Add time caption to each .png image
+  2. Create video using ffmpeg
 
 Demosaicing
  1. For tracking algorithms, either use:
