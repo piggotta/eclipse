@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 import dataclasses
 import datetime
 import os
@@ -7,17 +8,45 @@ import numpy as np
 import numpy.typing as npt
 import rawpy
 
+import constants
+
+
+BAYER_MASK_OFFSET = {
+    'red': (0, 0),
+    'green0': (0, 1),
+    'green1': (1, 0),
+    'blue': (1, 1),
+}
+
+
+@dataclasses.dataclass
+class Exposure:
+  exposure_s: float
+  f_number: float
+  iso: int
+
+  def norm_exposure_s(self) -> float:
+    """Returns exposure time normalized to f/1.0 and ISO 100."""
+    return self.exposure_s * (1 / self.f_number**2) * (self.iso / 100)
+
 
 @dataclasses.dataclass
 class RawImage:
-  filepath: str
-  index: int
-  time: datetime.datetime
+  filepath: str | None
+  index: int | None
+  time: datetime.datetime | None
   exposure_s: float
   f_number: float
   iso: int
   raw_image: npt.NDArray | None
   bw_image: npt.NDArray | None
+
+  def get_exposure(self) -> Exposure:
+    return Exposure(
+        exposure_s=self.exposure_s,
+        f_number=self.f_number,
+        iso=self.iso
+    )
 
 
 def read_attributes(filepath) -> RawImage:
@@ -52,16 +81,38 @@ def read_attributes(filepath) -> RawImage:
       bw_image=None)
 
 
-def read_image(filepath: str) -> RawImage:
+def read_image(filepath: str,
+               bayer_offset: tuple[int, int] = BAYER_MASK_OFFSET['red']
+               ) -> RawImage:
   image = read_attributes(filepath)
 
   # Read raw image.
   with rawpy.imread(filepath) as raw:
-    raw_image = np.copy(raw.raw_image)
+    image.raw_image = np.asarray(np.copy(raw.raw_image), dtype=int)
 
-  # Use (0, 0) Bayer subimage (green) as our black and white image.
-  green_image = raw_image[::2, ::2]
-
-  image.raw_image = raw_image
-  image.bw_image = green_image
+  # Use the selected Bayer subimage as our black and white image.
+  image.bw_image = image.raw_image[bayer_offset[0]::2, bayer_offset[1]::2]
   return image
+
+
+def maybe_load_images_by_index(
+    indices: Sequence[int],
+    bayer_offset: tuple[int, int] = BAYER_MASK_OFFSET['red'],
+    verbose: bool = True) -> list[RawImage]:
+  """Loads camera images by index. Skips any missing files."""
+  if verbose:
+    print('Loading...')
+
+  images = []
+  for index in indices:
+    filepath = os.path.join(constants.PHOTOS_PATH, f'IMG_{index}.CR2')
+    if not os.path.isfile(filepath):
+      continue
+    if verbose:
+      print(f'  {filepath}')
+    images.append(read_image(filepath, bayer_offset=bayer_offset))
+
+  if verbose:
+    print()
+
+  return images
