@@ -19,6 +19,9 @@ BAYER_MASK_OFFSET = {
 }
 
 
+_DEFAULT_BAYER_MASK = BAYER_MASK_OFFSET['red']
+
+
 @dataclasses.dataclass
 class Exposure:
   exposure_s: float
@@ -81,9 +84,9 @@ def read_attributes(filepath) -> RawImage:
       bw_image=None)
 
 
-def read_image(filepath: str,
-               bayer_offset: tuple[int, int] = BAYER_MASK_OFFSET['red']
-               ) -> RawImage:
+def read_image(
+    filepath: str,
+    bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK) -> RawImage:
   image = read_attributes(filepath)
 
   # Read raw image.
@@ -95,9 +98,22 @@ def read_image(filepath: str,
   return image
 
 
+def filepath_for_index(index: int):
+  return os.path.join(constants.PHOTOS_PATH, f'IMG_{index}.CR2')
+
+
+def maybe_load_image_by_index(
+    index: int,
+    bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK) -> RawImage:
+  filepath = filepath_for_index(index)
+  if not os.path.isfile(filepath):
+    return None
+  return read_image(filepath, bayer_offset=bayer_offset)
+
+
 def maybe_load_images_by_index(
     indices: Sequence[int],
-    bayer_offset: tuple[int, int] = BAYER_MASK_OFFSET['red'],
+    bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK,
     verbose: bool = True) -> list[RawImage]:
   """Loads camera images by index. Skips any missing files."""
   if verbose:
@@ -105,12 +121,11 @@ def maybe_load_images_by_index(
 
   images = []
   for index in indices:
-    filepath = os.path.join(constants.PHOTOS_PATH, f'IMG_{index}.CR2')
-    if not os.path.isfile(filepath):
-      continue
     if verbose:
-      print(f'  {filepath}')
-    images.append(read_image(filepath, bayer_offset=bayer_offset))
+      print(f'  {filepath_for_index(index)}')
+    image = maybe_load_image_by_index(index, bayer_offset=bayer_offset)
+    if image is not None:
+      images.append(image)
 
   if verbose:
     print()
