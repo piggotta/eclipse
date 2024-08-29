@@ -308,7 +308,7 @@ class PartialEclipsePreprocessor:
     with open(filepaths.metadata(filename), 'w') as f:
       f.write(json.dumps(dicts))
 
-    np.savez(filepaths.image_stack(filename),
+    np.savez(filepaths.cropped_partials(filename),
              cropped_images=self.cropped_images,
              is_sun=self.is_sun)
 
@@ -319,7 +319,7 @@ class PartialEclipsePreprocessor:
         cattrs.structure(d, PartialEclipseImageMetadata) for d in dicts
     ]
 
-    data = np.load(filepaths.image_stack(filename))
+    data = np.load(filepaths.cropped_partials(filename))
     self.cropped_images = data['cropped_images']
     self.is_sun = data['is_sun']
 

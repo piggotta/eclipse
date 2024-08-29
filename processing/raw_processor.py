@@ -6,6 +6,7 @@ import numpy as np
 import numpy.typing as npt
 
 import constants
+import filepaths
 import image_loader
 
 
@@ -34,10 +35,6 @@ def _exposure_ind(exposure: image_loader.Exposure):
   return constants.EXPOSURES.index(exposure)
 
 
-def _npz_filepath(filename):
-  return os.path.join(constants.OUTPUTS_PATH, filename + '.npz')
-
-
 class RawProcessor:
   shape: tuple[int, int]
   background: npt.NDArray
@@ -51,7 +48,7 @@ class RawProcessor:
 
   def save_calibration_to_file(self, filename: str):
     np.savez(
-        _npz_filepath(filename),
+        filepaths.calibration(filename),
         shape=self.shape,
         background=self.background,
         stdev=self.stdev,
@@ -59,7 +56,7 @@ class RawProcessor:
     )
 
   def load_calibration_from_file(self, filename: str):
-    data = np.load(_npz_filepath(filename))
+    data = np.load(filepaths.calibration(filename))
 
     self.shape = tuple(data['shape'])
     self.background = data['background']

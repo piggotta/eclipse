@@ -99,7 +99,7 @@ def read_image(
 
 
 def filepath_for_index(index: int):
-  return os.path.join(constants.PHOTOS_PATH, f'IMG_{index}.CR2')
+  return os.path.join(constants.PHOTOS_PATH, f'IMG_{index:04d}.CR2')
 
 
 def maybe_load_image_by_index(
