@@ -10,7 +10,7 @@ import raw_processor
 
 
 def create_hdr_image(processor: raw_processor.RawProcessor()):
-  images = image_loader.maybe_load_images_by_index(range(1350, 1357))
+  images = image_loader.maybe_read_images_by_index(range(1350, 1357))
   hdr_image = processor.stack_hdr_image(images)
 
   # Get a single-color sub-image.
@@ -31,7 +31,7 @@ def create_hdr_image(processor: raw_processor.RawProcessor()):
 def main():
   print('== Processing black frames ==')
   processor = raw_processor.RawProcessor()
-  black_frames = image_loader.maybe_load_images_by_index(
+  black_frames = image_loader.maybe_read_images_by_index(
       range(constants.IND_FIRST_BLACK, constants.IND_LAST_BLACK)
   )
   processor.process_black_frames(black_frames)

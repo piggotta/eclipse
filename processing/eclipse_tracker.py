@@ -30,15 +30,8 @@ class CroppedBwImageMetadata:
   offset: tuple[int, int]
 
 
-class ImageType(enum.Enum):
-  BW = 1
-  COLOR = 2
-
-
 @dataclasses.dataclass
 class EclipseTrack:
-  image_type: ImageType
-
   unix_time_s: list[float] | None
 
   sun_radius: float
@@ -65,11 +58,6 @@ def load_track(filename: str) -> EclipseTrack:
   with open(filepaths.metadata(filename), 'r') as f:
     serialized = json.loads(f.read())
   return cattrs.structure(serialized, EclipseTrack)
-
-
-def _validate_track(track: EclipseTrack):
-  if track.image_type != ImageType.BW:
-    raise ValueError('Image type must be BW.')
 
 
 def _align_with_cross_correlation(image_orig, image_new
@@ -127,8 +115,6 @@ class EclipseTracker:
   def plot_track(self,
                  track: EclipseTrack,
                  ind_to_plot: Sequence[int]):
-    _validate_track(track)
-
     # Render only the images we want to plot.
     track = copy.deepcopy(track)
     ind_to_plot = np.asarray(ind_to_plot)
@@ -154,8 +140,6 @@ class EclipseTracker:
                      method: str = 'L-BFGS-B',
                      verbose: bool = False
                      ) -> EclipseTrack:
-    _validate_track(initial_track)
-
     if verbose:
       print('Optimizing track...')
       print('  Variables: ' + ', '.join(params_to_fit))
@@ -300,7 +284,6 @@ class EclipseTracker:
     If sun_centers is None, cross-correlations are used to provide the initial
     guess for alignment. Otherwise, sun_centers is used as the initial guess.
     """
-    _validate_track(initial_track)
     track = copy.deepcopy(initial_track)
 
     num_images = self.bw_images.shape[0]

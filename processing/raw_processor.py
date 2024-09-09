@@ -152,6 +152,14 @@ class RawProcessor:
       )
       weight = not_saturated * (1 / stdev**2)
 
+      # Perform weighted average of pixel values from each image.
       weighted_pixels += weight * norm_image
       weights += weight
+
+    # Pixels with zero total weight are marked as NaN.
+    bad_pixels = weights == 0
+    weights[bad_pixels] = 1
+    weighted_pixels[bad_pixels] = np.nan
+
+    # Normalize pixel values by weights.
     return weighted_pixels / weights

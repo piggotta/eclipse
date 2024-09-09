@@ -1,25 +1,79 @@
+from collections.abc import Sequence
 import dataclasses
+import enum
+import json
+import gc
 import os
 
+import cattrs
+import colour
 import numpy as np
 import numpy.typing as npt
 
+from colour_demosaicing import (
+    ROOT_RESOURCES_EXAMPLES,
+    demosaicing_CFA_Bayer_bilinear,
+    demosaicing_CFA_Bayer_Malvar2004,
+    demosaicing_CFA_Bayer_Menon2007,
+    mosaicing_CFA_Bayer)
+
 import constants
+import eclipse_tracker
 import filepaths
 import image_loader
-import raw_processor
-import eclipse_tracker
 import partial_eclipse_tracker
+import raw_processor
+import total_eclipse_tracker
+
+# DELETE ME
+import matplotlib.pyplot as plt
+
+
+class ImageType(enum.Enum):
+  RAW = 0
+  HDR = 1
+  EMULATED = 2
 
 
 @dataclasses.dataclass
-class ProcessedImage:
+class ImageMetadata:
   index: int
   unix_time_s: float
-  is_total: bool
+  image_type: ImageType
+  sun_center: tuple[float, float]
 
 
-class EclipseImages:
+@dataclasses.dataclass
+class EclipseSequence:
+  """Eclipse track information for full raw images."""
+  image_metadata: list[ImageMetadata]
+
+  sun_radius: float
+  moon_radius: float
+
+  # Moon position is relative to sun.
+  moon_zero_time_s: float
+  moon_r0: float
+  moon_c0: float
+  moon_dr_dt: float
+  moon_dc_dt: float
+  moon_d2r_dt2: float
+  moon_d2c_dt2: float
+
+
+def save_sequence(filename: str, sequence: EclipseSequence):
+  serialized = cattrs.unstructure(sequence)
+  with open(filepaths.metadata(filename), 'w') as f:
+    f.write(json.dumps(serialized))
+
+
+def load_sequence(filename: str) -> EclipseSequence:
+  with open(filepaths.metadata(filename), 'r') as f:
+    serialized = json.loads(f.read())
+  return cattrs.structure(serialized, EclipseSequence)
+
+
+class TotalEclipseProcessor:
   def __init__(
       self,
       processor: raw_processor.RawProcessor,
@@ -36,72 +90,108 @@ class EclipseImages:
     """
     self.processor = processor
     self.partials_metadata = partials_preprocessor.image_metadata
-
-    if partials_track.image_type != eclipse_tracker.ImageType.BW:
-      raise ValueError(
-          'Expected image type for partial eclipse track to be BW')
     self.partials_track = partials_track
-
+    self.totals_track = None
+    self.totals_metadata = None
     self.corr_images_metadata = []
 
-  def _correct_partials(self):
-    print('Applying corrections to partial images...')
-    for metadata in self.partials_metadata:
-      index = metadata.common.index
-      print(f'  IMG_{index}.CR2')
-
-      image = image_loader.maybe_load_image_by_index(index)
-      corrected_image = self.processor.remove_hot_pixels(
-          self.processor.subtract_background(image))
-      np.savez(filepaths.corrected_raw(index),
-               raw=corrected_image.raw_image)
-
-      new_metadata = ProcessedImage(
-          index=index,
-          unix_time_s=metadata.common.unix_time_s,
-          is_total=False
-      )
-      self.corr_images_metadata.append(new_metadata)
-    print()
-
-  def _stack_hdr_totals(self):
-    print('Loading total eclipse images...')
-    images = []
-    for ind in range(constants.IND_FIRST_TOTAL, constants.IND_LAST_TOTAL + 1):
-      print(f'  IMG{ind:04d}.CR2')
-      images.append(image_loader.maybe_load_image_by_index(ind))
-    print()
+  def _stack_totals(self) -> list[int]:
+    print('Read total eclipse image attributes...')
+    attributes = image_loader.maybe_read_images_attributes_by_index(
+        range(constants.IND_FIRST_TOTAL, constants.IND_LAST_TOTAL + 1)
+    )
 
     print('Generating HDR total eclipse images...')
-    stacks = raw_processor.split_into_exposure_stacks(images)
+    stacks = raw_processor.split_into_exposure_stacks(attributes)
+    totals_indices = []
     for stack in stacks:
       if len(stack) != len(constants.EXPOSURES):
         continue
 
-      index = stack[0].index
-      print('  ' + filepaths.corrected_raw(index))
+      metadata = stack[0]
+      index = metadata.index
+      totals_indices.append(index)
+      unix_time_s = metadata.time.timestamp()
+      npz_filepath = filepaths.hdr_total(index)
+      print('  ' + npz_filepath)
 
-      hdr_image = self.processor.stack_hdr_image(stack)
-      np.savez(filepaths.corrected_raw(index),
-               raw=hdr_image)
+      indices = [entry.index for entry in stack]
+      images = image_loader.maybe_read_images_by_index(indices, verbose=False)
+      hdr_image = self.processor.stack_hdr_image(images)
 
-      new_metadata = ProcessedImage(
-          index=index,
-          unix_time_s=stack[0].time.timestamp(),
-          is_total=True
+      np.savez(npz_filepath,
+               index=index,
+               unix_time_s=unix_time_s,
+               raw=hdr_image
       )
-      self.corr_images_metadata.append(new_metadata)
+
+      del images
+      gc.collect()
+
     print()
+    return totals_indices
 
-  def correct_images(self):
-    self._correct_partials()
-    self._stack_hdr_totals()
+  def _track_totals(self, indices: Sequence[int]):
+    preprocessor = total_eclipse_tracker.TotalEclipsePreprocessor()
+    preprocessor.preprocess_images(indices)
+    self.totals_metadata = preprocessor.image_metadata
 
-    # Sort image metadata by timestamp.
-    unix_time_s = [entry.unix_time_s for entry in self.corr_images_metadata]
-    self.corr_images_metadata = [self.corr_images_metadata[ind] for ind in
-                                 np.argsort(unix_time_s)]
+    tracker = total_eclipse_tracker.TotalEclipseTracker()
+    preprocessor.init_total_eclipse_tracker(tracker)
+    self.totals_track = tracker.align_totals_to_partials_track(
+        self.partials_track)
 
-  def track_totals(self):
-    pass
+    tracker.plot_track(self.totals_track,
+                       range(len(self.totals_track.unix_time_s)))
 
+  def stack_and_track_totals(self):
+    indices = self._stack_totals()
+    self._track_totals(indices)
+
+  def build_sequence(self) -> EclipseSequence:
+    if not self.totals_track or not self.totals_metadata:
+      raise RuntimeError('stack_and_track_totals() must be called before '
+                         'generate_full_track()')
+
+    all_metadata = self.partials_metadata + self.totals_metadata
+    unix_time_s = [entry.common.unix_time_s for entry in all_metadata]
+
+    image_metadata = []
+    for ind in np.argsort(unix_time_s):
+      metadata = all_metadata[ind].common
+
+      if ind < len(self.partials_metadata):
+        image_type = ImageType.RAW
+        track = self.partials_track
+        track_ind = ind
+      else:
+        image_type = ImageType.HDR
+        track = self.totals_track
+        track_ind = ind - len(self.partials_metadata)
+
+      sun_center = tuple(
+          2 * np.asarray(track.sun_centers[track_ind]) +
+          np.asarray(metadata.bayer_offset) + 2 * np.asarray(metadata.offset)
+      )
+
+      image_metadata.append(
+          ImageMetadata(
+              index=metadata.index,
+              unix_time_s=metadata.unix_time_s,
+              image_type=image_type,
+              sun_center=sun_center
+          )
+      )
+
+    return EclipseSequence(
+        image_metadata=image_metadata,
+        sun_radius=self.partials_track.sun_radius,
+        moon_radius=self.partials_track.moon_radius,
+        moon_zero_time_s=self.partials_track.moon_zero_time_s,
+        moon_r0 = 2 * self.partials_track.moon_r0,
+        moon_c0 = 2 * self.partials_track.moon_c0,
+        moon_dr_dt = 2 * self.partials_track.moon_dr_dt,
+        moon_dc_dt = 2 * self.partials_track.moon_dc_dt,
+        moon_d2r_dt2 = 2 * self.partials_track.moon_d2r_dt2,
+        moon_d2c_dt2 = 2 * self.partials_track.moon_d2c_dt2,
+    )

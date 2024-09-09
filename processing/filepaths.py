@@ -17,6 +17,10 @@ def _make_folder_and_return_path(folder: str, filename: str):
   return os.path.join(folder, filename)
 
 
+def raw(index: int) -> str:
+  return os.path.join(constants.PHOTOS_PATH, f'IMG_{index:04d}.CR2')
+
+
 def metadata(filename: str) -> str:
   return _make_folder_and_return_path(constants.OUTPUTS_PATH,
                                       filename + '.cattr')
@@ -31,6 +35,6 @@ def cropped_partials(filename: str) -> str:
                                       filename + '.npz')
 
 
-def corrected_raw(index: int) -> str:
-  return _make_folder_and_return_path(constants.CORRECTED_RAWS_PATH,
-                                      f'corrected_raw_{index:04d}.npz')
+def hdr_total(index: int) -> str:
+  return _make_folder_and_return_path(constants.HDR_TOTALS_PATH,
+                                      f'total_{index:04d}.npz')

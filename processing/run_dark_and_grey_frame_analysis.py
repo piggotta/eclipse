@@ -25,7 +25,7 @@ def analyze_black_frames(processor: raw_processor.RawProcessor()):
 
 def analyze_grey_frames(processor: raw_processor.RawProcessor()):
   print('= Analyzing grey frames  ==')
-  grey_images = image_loader.maybe_load_images_by_index(
+  grey_images = image_loader.maybe_read_images_by_index(
       range(constants.IND_FIRST_GREY, constants.IND_LAST_GREY + 1)
   )
 
@@ -105,7 +105,7 @@ def analyze_grey_frames(processor: raw_processor.RawProcessor()):
 def main():
   print('== Processing black frames ==')
   processor = raw_processor.RawProcessor()
-  black_frames = image_loader.maybe_load_images_by_index(
+  black_frames = image_loader.maybe_read_images_by_index(
       range(constants.IND_FIRST_BLACK, constants.IND_LAST_BLACK)
   )
   processor.process_black_frames(black_frames)

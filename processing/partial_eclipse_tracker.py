@@ -1,8 +1,6 @@
 from collections.abc import Sequence
 import copy
-import enum
 import dataclasses
-import glob
 import json
 import os
 import time
@@ -100,7 +98,6 @@ class PartialEclipseTracker(eclipse_tracker.EclipseTracker):
     sun_centers = [(image_shape[0] // 2, image_shape[1] // 2)] * num_images
 
     initial_track = eclipse_tracker.EclipseTrack(
-        image_type=eclipse_tracker.ImageType.BW,
         sun_radius=self.options.guess_sun_radius,
         moon_radius=1,
         unix_time_s=unix_time_s,
@@ -157,7 +154,6 @@ class PartialEclipseTracker(eclipse_tracker.EclipseTracker):
     indices = indices[mask]
 
     track = eclipse_tracker.EclipseTrack(
-        image_type=eclipse_tracker.ImageType.BW,
         sun_radius=sun_radius,
         moon_radius=sun_radius,
         unix_time_s=None,
@@ -331,28 +327,29 @@ class PartialEclipsePreprocessor:
     max_index = constants.IND_LAST_SUN
     if max_images is not None:
       max_index = min(max_index, start_ind + max_images)
-    filenames  = [f'IMG_{ind:04d}.CR2' for ind in
-                  range(start_ind, max_index)]
-    filepaths = [os.path.join(constants.PHOTOS_PATH, filename) for filename
-                 in filenames]
+    indices = list(range(start_ind, max_index))
 
     # First pass to determine which images are valid partial eclipse images.
     print('Counting number of partial eclipse images...')
-    valid_filepaths = []
+    valid_indices = []
     is_first_partial = True
-    for filepath in filepaths:
-      attr = image_loader.read_attributes(filepath)
-      filename = os.path.split(filepath)[1]
+    for index in indices:
+      try:
+        attr = image_loader.maybe_read_image_attributes_by_index(index)
+      except ValueError:
+        continue
+
+      filename = os.path.split(attr.filepath)[1]
 
       if is_partial_eclipse(attr):
-        valid_filepaths.append(filepath)
+        valid_indices.append(index)
         if is_first_partial:
           is_first_partial = False
-          first_image = image_loader.read_image(filepath)
+          first_image = image_loader.maybe_read_image_by_index(index)
         print(f'  {filename:s}: partial eclipse')
       else:
         print(f'  {filename:s}: invalid')
-    num_partials = len(valid_filepaths)
+    num_partials = len(valid_indices)
     print(f'Number of partial eclipse images: {num_partials:d}')
     print()
 
@@ -361,11 +358,11 @@ class PartialEclipsePreprocessor:
     self.cropped_images = np.zeros((num_partials, *cropped_shape))
     self.is_sun = np.zeros((num_partials, *cropped_shape))
     self.image_metadata = []
-    for ind, filepath in enumerate(valid_filepaths):
-      filename = os.path.split(filepath)[1]
+    for ind, index in enumerate(valid_indices):
+      image = image_loader.maybe_read_image_by_index(index)
+      filename = os.path.split(image.filepath)[1]
       print(f'  {filename:s}')
 
-      image = image_loader.read_image(filepath)
       result = _preprocess_image(image, cropped_shape)
       self.image_metadata.append(result.metadata)
       self.cropped_images[ind, :, :] = result.cropped_image

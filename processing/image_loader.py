@@ -9,6 +9,7 @@ import numpy.typing as npt
 import rawpy
 
 import constants
+import filepaths
 
 
 BAYER_MASK_OFFSET = {
@@ -98,36 +99,65 @@ def read_image(
   return image
 
 
-def filepath_for_index(index: int):
-  return os.path.join(constants.PHOTOS_PATH, f'IMG_{index:04d}.CR2')
+def maybe_read_image_attributes_by_index(index: int) -> RawImage:
+  filepath = filepaths.raw(index)
+  if not os.path.isfile(filepath):
+    raise ValueError(f'{filepath} does not exist.')
+  return read_attributes(filepath)
 
 
-def maybe_load_image_by_index(
+def maybe_read_images_attributes_by_index(
+    indices: Sequence[int], verbose: bool = True) -> list[RawImage]:
+  """Reads camera images by index. Skips any missing files."""
+  if verbose:
+    print('Loading...')
+
+  attributes = []
+  for index in indices:
+    try:
+      attributes.append(
+          maybe_read_image_attributes_by_index(index))
+      if verbose:
+        print(f'  {filepaths.raw(index)}')
+    except ValueError:
+      pass
+
+  if verbose:
+    print()
+
+  return attributes
+
+
+def maybe_read_image_by_index(
     index: int,
     bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK) -> RawImage:
-  filepath = filepath_for_index(index)
+  filepath = filepaths.raw(index)
   if not os.path.isfile(filepath):
-    return None
+    raise ValueError(f'{filepath} does not exist.')
   return read_image(filepath, bayer_offset=bayer_offset)
 
 
-def maybe_load_images_by_index(
+def maybe_read_images_by_index(
     indices: Sequence[int],
     bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK,
     verbose: bool = True) -> list[RawImage]:
-  """Loads camera images by index. Skips any missing files."""
+  """Reads camera images by index. Skips any missing files."""
   if verbose:
     print('Loading...')
 
   images = []
   for index in indices:
-    if verbose:
-      print(f'  {filepath_for_index(index)}')
-    image = maybe_load_image_by_index(index, bayer_offset=bayer_offset)
-    if image is not None:
-      images.append(image)
+    try:
+      images.append(
+          maybe_read_image_by_index(index, bayer_offset=bayer_offset))
+      if verbose:
+        print(f'  {filepaths.raw(index)}')
+    except ValueError:
+      pass
 
   if verbose:
     print()
 
   return images
+
+
