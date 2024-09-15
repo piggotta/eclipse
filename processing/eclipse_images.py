@@ -6,16 +6,9 @@ import gc
 import os
 
 import cattrs
-import colour
+import colour_demosaicing
 import numpy as np
 import numpy.typing as npt
-
-from colour_demosaicing import (
-    ROOT_RESOURCES_EXAMPLES,
-    demosaicing_CFA_Bayer_bilinear,
-    demosaicing_CFA_Bayer_Malvar2004,
-    demosaicing_CFA_Bayer_Menon2007,
-    mosaicing_CFA_Bayer)
 
 import constants
 import eclipse_tracker
@@ -195,3 +188,163 @@ class TotalEclipseProcessor:
         moon_d2r_dt2 = 2 * self.partials_track.moon_d2r_dt2,
         moon_d2c_dt2 = 2 * self.partials_track.moon_d2c_dt2,
     )
+
+
+def _demosaic_image(raw: npt.NDArray,
+                    white_level: float) -> npt.NDArray:
+  scaled_raw = np.copy(raw)
+
+  # Scale image to white level.
+  scaled_raw = scaled_raw / white_level
+
+  # Clip image to white and black levels. Assume np.nan pixels are saturated.
+  scaled_raw[np.isnan(scaled_raw)] = 1
+  scaled_raw = np.minimum(1, np.maximum(1e-3, scaled_raw))
+
+  # Apply demosaicing.
+  return colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(scaled_raw)
+
+
+class Renderer:
+  def __init__(
+      self,
+      processor: raw_processor.RawProcessor,
+      sequence: EclipseSequence
+  ):
+    self.processor = processor
+    self.sequence = sequence
+    self.seq_ind_from_unix_time_s = {entry.unix_time_s: ind for ind, entry in
+                                     enumerate(sequence.image_metadata)}
+    self.index_from_unix_time_s = {entry.unix_time_s: entry.index for entry in
+                                   sequence.image_metadata}
+
+  def _read_total(self, unix_time_s) -> npt.NDArray:
+    ind = self.seq_ind_from_unix_time_s[unix_time_s]
+    metadata = self.sequence.image_metadata[ind]
+    if metadata.image_type != ImageType.HDR:
+      raise ValueError('Expected image type to be HDR.')
+    data = np.load(filepaths.hdr_total(metadata.index))
+    return data['raw']
+
+  def _read_and_correct_partial(self, unix_time_s) -> npt.NDArray:
+    index = self.index_from_unix_time_s[unix_time_s]
+    image = image_loader.maybe_read_image_by_index(index)
+    corrected_image = self.processor.remove_hot_pixels(
+        self.processor.subtract_background(image))
+    return corrected_image.raw_image
+
+  def render_total(self, unix_time_s: float):
+    raw = self._read_total(unix_time_s)
+    balanced_raw = image_loader.correct_white_balance(raw, constants.WB_TOTAL)
+
+    # Crop image...
+    cropped = balanced_raw
+
+    # Custom HDR...
+    hdr = cropped
+
+    # Demosaic image.
+    final = _demosaic_image(hdr, constants.WHITE_LEVEL_TOTAL)
+
+    # Save me to file...
+    index = self.index_from_unix_time_s[unix_time_s]
+
+  def analyze_total(self, unix_time_s: float):
+    seq_ind = self.seq_ind_from_unix_time_s[unix_time_s]
+    metadata = self.sequence.image_metadata[seq_ind]
+
+    raw = self._read_total(unix_time_s)
+    raw = image_loader.correct_white_balance(raw, constants.WB_TOTAL)
+
+    r = np.arange(raw.shape[0])
+    c = np.arange(raw.shape[1])
+    r, c = np.meshgrid(r, c, indexing='ij')
+    radius = np.sqrt((r - metadata.sun_center[0])**2 +
+                     (c - metadata.sun_center[1])**2)
+
+    radius = radius[200:-200, 200:-200]
+    raw = raw[200:-200, 200:-200]
+
+    mean_raw = {}
+    radius_bins = np.linspace(0, np.max(radius), 100)
+    for color in image_loader.BAYER_MASK_OFFSET:
+      r0, c0 = image_loader.BAYER_MASK_OFFSET[color]
+      radius_color = radius[r0::2, c0::2]
+      raw_color = raw[r0::2, c0::2]
+
+      mean_raw[color] = []
+      for ind in range(radius_bins.size - 1):
+        mask = np.logical_and(radius_color >= radius_bins[ind],
+                              radius_color < radius_bins[ind + 1])
+        mean_raw[color].append(np.nanmean(raw_color[mask]))
+      mean_raw[color] = np.asarray(mean_raw[color])
+
+    plt.figure()
+    for color in image_loader.BAYER_MASK_OFFSET:
+      plt.semilogy(radius_bins[:-1], mean_raw[color], label=color, markersize=1)
+    plt.legend()
+    plt.ylim(1e3)
+    plt.title(f'{unix_time_s} - brightness vs radius')
+
+    plt.figure()
+    for color in image_loader.BAYER_MASK_OFFSET:
+      plt.plot(radius_bins[:-1],
+                   mean_raw[color] / mean_raw['green0'],
+                   label=color,
+                   markersize=1)
+    plt.legend()
+    plt.title(f'{unix_time_s} - color ratios')
+
+    # Let's apply a fit!
+    all_color_mean = 0
+    for color in image_loader.BAYER_MASK_OFFSET:
+      all_color_mean += mean_raw[color]
+    all_color_mean *= 1 / len(image_loader.BAYER_MASK_OFFSET)
+
+    radius_min = 300
+    radius_max = 1500
+    mask = np.logical_and(radius_bins[:-1] > radius_min,
+                          radius_bins[:-1] < radius_max)
+    radius_fit = radius_bins[:-1][mask]
+    raw_fit = all_color_mean[mask]
+    p = np.polyfit(radius_fit, np.log(raw_fit), 4)
+    print('Fit:', p)
+
+    plt.figure()
+    plt.semilogy(radius_fit, raw_fit, 'k', label='Data')
+    plt.semilogy(radius_fit, np.exp(np.polyval(p, radius_fit)), 'r', label='Fit')
+    plt.legend()
+    plt.title(f'{unix_time_s} - fit')
+
+    # Apply fit.
+    hdr = raw * np.exp(-np.polyval(p, radius))
+    hdr = hdr[500:-500, 1000:-1000]
+    rgb =  _demosaic_image(hdr, np.nanmax(hdr))
+    rgb = np.maximum(0, np.tanh(5 * rgb))
+    plt.figure()
+    plt.imshow(rgb)
+
+  def _correct_partials(self):
+    """We cannot use this function because it requires too much disk space."""
+    print('Applying corrections to partial images...')
+    for metadata in self.partials_metadata:
+      index = metadata.common.index
+      print(f'  IMG_{index}.CR2')
+
+      try:
+        image = image_loader.maybe_read_image_by_index(index)
+        corrected_image = self.processor.remove_hot_pixels(
+            self.processor.subtract_background(image))
+        np.savez(filepaths.corrected_raw(index),
+                 raw=corrected_image.raw_image)
+
+        new_metadata = ProcessedImage(
+            index=index,
+            unix_time_s=metadata.common.unix_time_s,
+            is_total=False
+        )
+        self.corr_images_metadata.append(new_metadata)
+      except ValueError:
+        pass
+    print()
+

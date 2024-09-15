@@ -1,3 +1,5 @@
+import dataclasses
+
 import image_loader
 
 PHOTOS_PATH = 'photos'
@@ -27,3 +29,15 @@ EXPOSURES = [
 ]
 
 LONGEST_EXPOSURE_IND = 0
+
+WB_TOTAL = image_loader.WhiteBalance(
+    blue_scaling = 1 / 0.65,
+    red_scaling = 1 / 0.49,
+)
+
+WB_PARTIAL = image_loader.WhiteBalance(
+    blue_scaling = 1 / 0.65,
+    red_scaling = 1 / 0.49,
+)
+
+WHITE_LEVEL_TOTAL = 1e8

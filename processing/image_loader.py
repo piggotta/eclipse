@@ -24,6 +24,12 @@ _DEFAULT_BAYER_MASK = BAYER_MASK_OFFSET['red']
 
 
 @dataclasses.dataclass
+class WhiteBalance:
+  blue_scaling: float
+  red_scaling: float
+
+
+@dataclasses.dataclass
 class Exposure:
   exposure_s: float
   f_number: float
@@ -161,3 +167,15 @@ def maybe_read_images_by_index(
   return images
 
 
+def correct_white_balance(
+    raw_image: npt.NDArray,
+    white_balance: WhiteBalance) -> npt.NDArray:
+  corrected = np.copy(raw_image)
+
+  r0, c0 = BAYER_MASK_OFFSET['blue']
+  corrected[r0::2, c0::2] *= white_balance.blue_scaling
+
+  r0, c0 = BAYER_MASK_OFFSET['red']
+  corrected[r0::2, c0::2] *= white_balance.red_scaling
+
+  return corrected
