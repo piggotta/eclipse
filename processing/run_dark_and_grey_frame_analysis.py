@@ -42,29 +42,32 @@ def analyze_grey_frames(processor: raw_processor.RawProcessor()):
         'different exposures...')
   print()
   num_ratios = int(np.max([len(stack) for stack in stacks])) - 1
-  actual_ratios = [[] for _ in range(num_ratios)]
+  actual_ratios = {}
   expected_ratios = [[] for _ in range(num_ratios)]
   for colour in image_loader.BAYER_MASK_OFFSET:
+    actual_ratios[colour] = [[] for _ in range(num_ratios)]
+
     offset = image_loader.BAYER_MASK_OFFSET[colour]
     print(f'Bayer mask: {colour} {offset}')
 
     for stack_num, stack in enumerate(stacks):
       images = [image.raw_image[offset[0]::2, offset[1]::2]
                 for image in stack]
+      invalid_pixels = []
 
       invalid = []
       for image in images:
         num_pixels = np.prod(image.shape)
-        current_invalid = False
 
-        # Check for image saturation.
-        if np.sum(image > 12e3) / num_pixels > 0.2:
+        # Pixels that are too saturated or too dark are considered invalid.
+        current_invalid_pixels = np.logical_or(image > 10e3, image < 40)
+        invalid_pixels.append(current_invalid_pixels)
+
+        # Do not use images that have too many invalid pixels.
+        if np.sum(current_invalid_pixels) / num_pixels > 0.7:
           current_invalid = True
-
-        # Check if image is essentially completely black.
-        if np.sum(image < 20) / num_pixels > 0.2:
-          current_invalid = True
-
+        else:
+          current_invalid = False
         invalid.append(current_invalid)
 
       print(f'  Stack {stack_num:d}:')
@@ -72,12 +75,9 @@ def analyze_grey_frames(processor: raw_processor.RawProcessor()):
         if invalid[ind] or invalid[ind + 1]:
           continue
         actual_ratio = images[ind] / images[ind + 1]
-        invalid_pixels = np.logical_or(
-            np.logical_not(np.isfinite(actual_ratio)),
-            np.abs(actual_ratio) > 100
-        )
-        actual_ratio[invalid_pixels] = np.nan
-        actual_ratios[ind].append(np.nanmean(actual_ratio))
+        actual_ratio[invalid_pixels[ind]] = np.nan
+        actual_ratio[invalid_pixels[ind + 1]] = np.nan
+        actual_ratios[colour][ind].append(np.nanmean(actual_ratio))
 
         expected_ratio = (stack[ind].get_exposure().norm_exposure_s() /
                           stack[ind + 1].get_exposure().norm_exposure_s())
@@ -92,12 +92,17 @@ def analyze_grey_frames(processor: raw_processor.RawProcessor()):
       print()
 
   print('Summary of ratios:')
-  for ind in range(len(actual_ratios)):
+  for ind in range(len(expected_ratios)):
+    reports = []
+    for colour in image_loader.BAYER_MASK_OFFSET:
+      reports.append(
+          f'{np.mean(actual_ratios[colour][ind]):5.2f} +/- '
+          f'{np.std(actual_ratios[colour][ind]):4.2f} ({colour})'
+      )
+    report = ', '.join(reports)
     print(
         f'  Image {ind:d} vs {ind + 1:d}: '
-        f'{expected_ratios[ind]:5.2f} (expected), '
-        f'{np.mean(actual_ratios[ind]):5.2f} +/- '
-        f'{np.std(actual_ratios[ind]):4.2f} (actual)'
+        f'{expected_ratios[ind]:5.2f} (expected), ' + report
     )
   print()
 
