@@ -2,8 +2,11 @@ from collections.abc import Sequence
 import copy
 import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+from scipy import ndimage
+from scipy import special
 
 import constants
 import filepaths
@@ -33,6 +36,23 @@ def split_into_exposure_stacks(images: Sequence[image_loader.RawImage]):
 
 def _exposure_ind(exposure: image_loader.Exposure):
   return constants.EXPOSURES.index(exposure)
+
+
+def _remove_specified_pixels(image: npt.NDArray,
+                             pixel_indices: Sequence[tuple[int, int]]
+                             ) -> npt.NDArray:
+  corrected =  np.copy(image)
+
+  # Replace hot pixels with average of the 4 neighbouring pixels from the
+  # same Bayer subimage.
+  for row, col in pixel_indices:
+    corrected[row, col] = np.mean((
+        corrected[row - 2, col],
+        corrected[row + 2, col],
+        corrected[row, col - 2],
+        corrected[row, col + 2]
+    ))
+  return corrected
 
 
 class RawProcessor:
@@ -117,50 +137,54 @@ class RawProcessor:
 
     new_image = copy.copy(image)
     new_image.bw_image = None
-
-    # Replace hot pixels with average of the 4 neighbouring pixels from the
-    # same Bayer subimage.
-    corrected =  np.copy(image.raw_image)
-    for row, col in self.hot_pixel_indices:
-      corrected[row, col] = np.mean((
-          corrected[row - 2, col],
-          corrected[row + 2, col],
-          corrected[row, col - 2],
-          corrected[row, col + 2]
-      ))
-    new_image.raw_image = corrected
+    new_image.raw_image = _remove_specified_pixels(
+        image.raw_image,
+        self.hot_pixel_indices
+    )
     return new_image
 
-  def stack_hdr_image(self, images: Sequence[image_loader.RawImage]
-                      ) -> npt.NDArray:
-    weights = np.zeros(images[0].raw_image.shape, dtype=float)
-    weighted_pixels = np.zeros(images[0].raw_image.shape, dtype=float)
-    for image in images:
+  def stack_hdr_image(self, images: Sequence[image_loader.RawImage],
+                      smoothing_radius: float = 5) -> npt.NDArray:
+    stack_shape = (len(images),) + images[0].raw_image.shape
+    norm_images = np.zeros(stack_shape, dtype=float)
+    weights = np.zeros(stack_shape, dtype=float)
+    inv_stdev = np.zeros(stack_shape, dtype=float)
+
+    for ind, image in enumerate(images):
       corrected_image = self.remove_hot_pixels(self.subtract_background(image))
 
       # Normalize image to an F-number of 1.0 and ISO 100.
       effective_exposure_s = (
           image.exposure_s / image.f_number**2 * image.iso / 100)
       scale_factor = 1 / effective_exposure_s
-      norm_image = scale_factor * corrected_image.raw_image
+      norm_images[ind] = scale_factor * corrected_image.raw_image
 
-      # Determine weight per pixel.
-      not_saturated = image.raw_image < self.saturated_pixel_value
+      # Determines non-saturated subset of image and weights to use for merging.
+      saturated = ndimage.maximum_filter(
+          image.raw_image > self.saturated_pixel_value,
+          size=3,
+      )
+      dist_to_saturated = ndimage.distance_transform_edt(
+          np.logical_not(saturated))
+      weights[ind] = np.minimum(1,  dist_to_saturated / smoothing_radius)
+
+      # Determine inverse standard deviation per pixel.
       stdev = scale_factor * np.maximum(
           1e-2,
           self.stdev[_exposure_ind(image.get_exposure())]
       )
-      weight = not_saturated * (1 / stdev**2)
+      inv_stdev[ind] = np.logical_not(saturated)  / stdev
 
-      # Perform weighted average of pixel values from each image.
-      weighted_pixels += weight * norm_image
-      weights += weight
+    # Take weighted average of the best two exposures for each pixel.
+    pixel_ranking = np.argsort(-inv_stdev, axis=0)
+    weight = np.take_along_axis(weights, pixel_ranking[:1], axis=0)
+    weighted_average = (
+        weight * np.take_along_axis(norm_images, pixel_ranking[:1], axis=0) +
+        (1 - weight) * np.take_along_axis(
+            norm_images, pixel_ranking[1:2], axis=0)
+    )[0]
 
     # Pixels with zero total weight are saturated at all exposures.
-    # Mark these with np.nan.
-    saturated_pixels = weights == 0
-    weights[saturated_pixels] = 1
-    weighted_pixels[saturated_pixels] = np.nan
-
-    # Normalize pixel values by weights.
-    return weighted_pixels / weights
+    # Remove these in the same way as we remove hot pixels.
+    saturated_pixel_indices = np.argwhere(np.sum(weights, axis=0) == 0)
+    return _remove_specified_pixels(weighted_average, saturated_pixel_indices)

@@ -29,8 +29,9 @@ def create_hdr_image(processor: raw_processor.RawProcessor()):
 
 
 def main():
-  print('== Processing black frames ==')
   processor = raw_processor.RawProcessor()
+
+  print('== Processing black frames ==')
   black_frames = image_loader.maybe_read_images_by_index(
       range(constants.IND_FIRST_BLACK, constants.IND_LAST_BLACK)
   )
