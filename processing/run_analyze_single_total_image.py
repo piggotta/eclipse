@@ -11,7 +11,7 @@ import raw_processor
 
 
 def main():
-  total_ind = 10
+  total_eclipse_index = 15
 
   # Load raw image processor configuration from file.
   processor = raw_processor.RawProcessor()
@@ -23,7 +23,9 @@ def main():
   )
 
   # Stack and HDR image.
-  stack = raw_processor.split_into_exposure_stacks(attributes)[total_ind]
+  stack = raw_processor.split_into_exposure_stacks(attributes)[
+      total_eclipse_index
+  ]
   metadata = stack[0]
   index = metadata.index
   unix_time_s = metadata.time.timestamp()

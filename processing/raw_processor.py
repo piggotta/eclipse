@@ -72,7 +72,8 @@ class RawProcessor:
         shape=self.shape,
         background=self.background,
         stdev=self.stdev,
-        hot_pixel_indices=np.asarray(self.hot_pixel_indices)
+        hot_pixel_indices=np.asarray(self.hot_pixel_indices),
+        effective_exposures_s=np.asarray(self.effective_exposures_s),
     )
 
   def load_calibration_from_file(self, filename: str):
@@ -83,6 +84,7 @@ class RawProcessor:
     self.stdev = data['stdev']
     self.hot_pixel_indices = [(entry[0], entry[1]) for entry in
                               data['hot_pixel_indices']]
+    self.effective_exposures_s = data['effective_exposures_s']
 
   def process_black_frames(self, images: Sequence[image_loader.RawImage]):
     images = list(images)
@@ -119,6 +121,116 @@ class RawProcessor:
     hot_pixels[:, -2:] = False
     self.hot_pixel_indices = np.argwhere(hot_pixels)
 
+  def process_grey_frames(self, images: Sequence[image_loader.RawImage],
+                          verbose: bool = False):
+    def maybe_print(message: str = ''):
+      if verbose:
+        print(message)
+
+    images = [
+        self.remove_hot_pixels(self.subtract_background(image))
+        for image in images
+    ]
+    stacks = split_into_exposure_stacks(images)
+
+    maybe_print('Comparing expected vs actual ratios in pixel values for '
+                'different exposures...')
+    maybe_print()
+    num_ratios = int(np.max([len(stack) for stack in stacks])) - 1
+    actual_ratios = {}
+    expected_ratios = [[] for _ in range(num_ratios)]
+    for colour in image_loader.BAYER_MASK_OFFSET:
+      actual_ratios[colour] = [[] for _ in range(num_ratios)]
+
+      offset = image_loader.BAYER_MASK_OFFSET[colour]
+      maybe_print(f'Bayer mask: {colour} {offset}')
+
+      for stack_num, stack in enumerate(stacks):
+        images = [image.raw_image[offset[0]::2, offset[1]::2]
+                  for image in stack]
+        invalid_pixels = []
+
+        invalid = []
+        for image in images:
+          num_pixels = np.prod(image.shape)
+
+          # Pixels that are too saturated or too dark are considered invalid.
+          current_invalid_pixels = np.logical_or(image > 10e3, image < 40)
+          invalid_pixels.append(current_invalid_pixels)
+
+          # Do not use images that have too many invalid pixels.
+          if np.sum(current_invalid_pixels) / num_pixels > 0.7:
+            current_invalid = True
+          else:
+            current_invalid = False
+          invalid.append(current_invalid)
+
+        maybe_print(f'  Stack {stack_num:d}:')
+        for ind in range(len(stack) - 1):
+          if invalid[ind] or invalid[ind + 1]:
+            continue
+          actual_ratio = images[ind] / np.maximum(images[ind + 1], 1e-3)
+          actual_ratio[invalid_pixels[ind]] = np.nan
+          actual_ratio[invalid_pixels[ind + 1]] = np.nan
+          actual_ratios[colour][ind].append(np.nanmean(actual_ratio))
+
+          expected_ratio = (stack[ind].get_exposure().norm_exposure_s() /
+                            stack[ind + 1].get_exposure().norm_exposure_s())
+          expected_ratios[ind] = expected_ratio
+
+          maybe_print(
+              f'    Image {ind:d} vs {ind + 1:d}: '
+              f'{expected_ratio:5.2f} (expected), '
+              f'{np.nanmean(actual_ratio):5.2f} +/- '
+              f'{np.nanstd(actual_ratio):4.2f} (actual)'
+          )
+        maybe_print()
+
+    maybe_print('Summary of ratios:')
+    for ind in range(len(expected_ratios)):
+      reports = []
+      for colour in image_loader.BAYER_MASK_OFFSET:
+        current_ratios = actual_ratios[colour][ind]
+        if len(current_ratios) == 1:
+          reports.append(
+              f'{np.mean(current_ratios):5.2f} +/- ____ ({colour})'
+          )
+        else:
+          reports.append(
+              f'{np.mean(current_ratios):5.2f} +/- '
+              f'{np.std(current_ratios):4.2f} ({colour})'
+          )
+      report = ', '.join(reports)
+
+      maybe_print(
+          f'  Image {ind:d} vs {ind + 1:d}: '
+          f'{expected_ratios[ind]:5.2f} (expected), ' + report
+      )
+    maybe_print()
+
+    # Averages exposure ratios across colours.
+    avg_ratios = []
+    for ind in range(len(expected_ratios)):
+      avg_ratio = np.mean(
+          np.concatenate([
+            actual_ratios[colour][ind] for colour in
+            image_loader.BAYER_MASK_OFFSET
+        ])
+      )
+      avg_ratios.append(avg_ratio)
+    if len(avg_ratios) != len(constants.EXPOSURES) - 1:
+      raise ValueError(
+          f'Expected {len(constants.EXPOSURES) - 1} exposure ratios, but '
+          f'actually have {len(avg_ratios)}'
+      )
+
+    # Computes equivalent exposure times relative to F1.0 and ISO100.
+    self.effective_exposures_s = [constants.EXPOSURES[0].norm_exposure_s()]
+    for avg_ratio in avg_ratios:
+      self.effective_exposures_s.append(
+          self.effective_exposures_s[-1] / avg_ratio
+      )
+
   def subtract_background(self, image: image_loader.RawImage
                           ) -> image_loader.RawImage:
     if image.raw_image.shape != self.shape:
@@ -154,8 +266,9 @@ class RawProcessor:
       corrected_image = self.remove_hot_pixels(self.subtract_background(image))
 
       # Normalize image to an F-number of 1.0 and ISO 100.
-      effective_exposure_s = (
-          image.exposure_s / image.f_number**2 * image.iso / 100)
+      effective_exposure_s = self.effective_exposures_s[
+          constants.EXPOSURES.index(image.get_exposure())
+      ]
       scale_factor = 1 / effective_exposure_s
       norm_images[ind] = scale_factor * corrected_image.raw_image
 
