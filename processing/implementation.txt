@@ -123,19 +123,23 @@ Demosaicing
    default 3 is essentially impossible to beat.
 
 === Updated HDR processing ===
-First steps
- 1. Implement a quick script for running full image processing stack on a single
-    total-eclipse image.
+Stacking for colour
+* Process prominences (linear + minor HDR) and corona (nonlinear) independently
+* Combine using some type of thresholding
+* Prominences should try to use true-color as much as possible. They are bright
+  red in the original photos!
 
- 2. Use empirically determined exposure ratios, rather than expected values
-    a. Use the same exposure ratio for all colours, since the colour channels are
-       extremely well correlated
+Denoising
+* Handle each color channel separately
+* Use masked combinations of images
+    * Original in center and denoised in outer regions
+    * Taper between regions
+* Average in radial direction
+    1. Transform to spherical coordinates: oversample except for very edges
+    2. Use 1D Gaussian filter to filter in radial direction
+    3. Undo spherical direction transformation
+   For interpolation, use bicubic interpolation to keep things smooth.
 
-Exploration
-* Consider using spatially aware tapering lengths, rather than a global taper
-  length: we want smaller tapers near the middle of the image, and longer tapers
-  near the edges of the image
-* Need to figure out some sort of denoising approach
-  * Option 1: denoise each color channel independently before stacking
-  * Option 2: denoise after stacking and demosaicing
-
+Useful library functions
+* Generic mask functions
+* Combine images using a mask (trivial?)
