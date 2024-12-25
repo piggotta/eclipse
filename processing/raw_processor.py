@@ -61,8 +61,8 @@ class RawProcessor:
   stdev: npt.NDArray
   hot_pixel_indices: list[tuple[int, int]]
 
-  def __init__(self, hot_pixel_threshold: int = 5000,
-               saturated_pixel_value: int = 14_000):
+  def __init__(self, hot_pixel_threshold: int = 3000,
+               saturated_pixel_value: int = 15_000):
     self.hot_pixel_threshold = hot_pixel_threshold
     self.saturated_pixel_value = saturated_pixel_value
 
@@ -155,7 +155,7 @@ class RawProcessor:
           num_pixels = np.prod(image.shape)
 
           # Pixels that are too saturated or too dark are considered invalid.
-          current_invalid_pixels = np.logical_or(image > 10e3, image < 40)
+          current_invalid_pixels = np.logical_or(image > 12e3, image < 40)
           invalid_pixels.append(current_invalid_pixels)
 
           # Do not use images that have too many invalid pixels.
