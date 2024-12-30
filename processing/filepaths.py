@@ -25,6 +25,7 @@ def metadata(filename: str) -> str:
   return _make_folder_and_return_path(constants.OUTPUTS_PATH,
                                       filename + '.cattr')
 
+
 def calibration(filename: str) -> str:
   return _make_folder_and_return_path(constants.OUTPUTS_PATH,
                                       filename + '.npz')
@@ -35,6 +36,17 @@ def cropped_partials(filename: str) -> str:
                                       filename + '.npz')
 
 
+def corona_fit() -> str:
+  return _make_folder_and_return_path(constants.OUTPUTS_PATH,
+                                      'corona_fit.npz')
+
+
 def hdr_total(index: int) -> str:
   return _make_folder_and_return_path(constants.HDR_TOTALS_PATH,
                                       f'total_{index:04d}.npz')
+
+
+def rendered(index: int) -> str:
+  return _make_folder_and_return_path(constants.RENDERED_PATH,
+                                      f'img_{index:04d}.npz')
+

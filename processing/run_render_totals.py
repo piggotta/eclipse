@@ -1,7 +1,12 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
+import constants
 import eclipse_images
+import eclipse_tracker
+import filepaths
+import image_loader
+import partial_eclipse_tracker
 import raw_processor
 
 
@@ -20,9 +25,12 @@ def main():
   totals_unix_time_s = [entry.unix_time_s for entry in sequence.image_metadata
                         if entry.image_type == eclipse_images.ImageType.HDR]
 
-  #for ind in (0, 1, 2, 5, 10, 18):
-  for ind in (2,):
-    renderer.analyze_total(totals_unix_time_s[ind])
+  # Load corona fit.
+  p_fit = np.load(filepaths.corona_fit())['p_fit']
+
+  # Render images.
+  for ind in 1, 10, -2:
+    renderer.render_total(totals_unix_time_s[ind], p_fit)
 
   plt.show()
 

@@ -26,3 +26,24 @@ def draw_circle(image_shape: tuple[int, int],
   else:
     raise ValueError(f'Unexpected renderer "{renderer}"')
 
+def draw_tapered_disc(image_shape: tuple[int, int],
+                      center: tuple[float, float],
+                      inner_radius: float,
+                      outer_radius: float) -> npt.NDArray:
+  """Draws a filled disc with a tapered edge.
+
+  The pixels are set to 1 within the inner radius, and set to 0 outside the
+  outer radius. The values linearly taper from the inner to outer radius.
+  """
+  x = np.arange(image_shape[0]) - center[0]
+  y = np.arange(image_shape[1]) - center[1]
+  x, y = np.meshgrid(x, y, indexing='ij')
+  r = np.sqrt(x**2 + y**2)
+  return np.clip(
+      (outer_radius - r) / (outer_radius - inner_radius),
+      a_min=0,
+      a_max=1
+  )
+
+
+

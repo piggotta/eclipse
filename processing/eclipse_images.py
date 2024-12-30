@@ -13,13 +13,22 @@ import numpy.typing as npt
 import constants
 import eclipse_tracker
 import filepaths
+import filtering
 import image_loader
 import partial_eclipse_tracker
 import raw_processor
 import total_eclipse_tracker
 
-# DELETE ME
+
+# TODO: delete me
 import matplotlib.pyplot as plt
+
+
+CORONA_RADIUS_MIN = 300
+CORONA_RADIUS_MAX = 3000
+
+# Internal constants.
+_CROP_PIXELS = 200
 
 
 class ImageType(enum.Enum):
@@ -218,13 +227,26 @@ class Renderer:
     self.index_from_unix_time_s = {entry.unix_time_s: entry.index for entry in
                                    sequence.image_metadata}
 
-  def _read_total(self, unix_time_s) -> npt.NDArray:
+  def _read_total(self, unix_time_s: float) -> npt.NDArray:
     ind = self.seq_ind_from_unix_time_s[unix_time_s]
     metadata = self.sequence.image_metadata[ind]
     if metadata.image_type != ImageType.HDR:
       raise ValueError('Expected image type to be HDR.')
     data = np.load(filepaths.hdr_total(metadata.index))
     return data['raw']
+
+  def _get_metadata(self, unix_time_s: float) -> ImageMetadata:
+    seq_ind = self.seq_ind_from_unix_time_s[unix_time_s]
+    return self.sequence.image_metadata[seq_ind]
+
+  def _radius_from_sun(self, unix_time_s: float) -> npt.NDArray:
+    raw = self._read_total(unix_time_s)
+    metadata = self._get_metadata(unix_time_s)
+    r = np.arange(raw.shape[0])
+    c = np.arange(raw.shape[1])
+    r, c = np.meshgrid(r, c, indexing='ij')
+    return np.sqrt((r - metadata.sun_center[0])**2 +
+                   (c - metadata.sun_center[1])**2)
 
   def _read_and_correct_partial(self, unix_time_s) -> npt.NDArray:
     index = self.index_from_unix_time_s[unix_time_s]
@@ -233,38 +255,15 @@ class Renderer:
         self.processor.subtract_background(image))
     return corrected_image.raw_image
 
-  def render_total(self, unix_time_s: float):
-    raw = self._read_total(unix_time_s)
-    balanced_raw = image_loader.correct_white_balance(raw, constants.WB_TOTAL)
-
-    # Crop image...
-    cropped = balanced_raw
-
-    # Custom HDR...
-    hdr = cropped
-
-    # Demosaic image.
-    final = _demosaic_image(hdr, constants.WHITE_LEVEL_TOTAL)
-
-    # Save me to file...
-    index = self.index_from_unix_time_s[unix_time_s]
-
-  def analyze_total(self, unix_time_s: float):
-    seq_ind = self.seq_ind_from_unix_time_s[unix_time_s]
-    metadata = self.sequence.image_metadata[seq_ind]
-
+  def fit_corona(self, unix_time_s: float) -> npt.NDArray:
     raw = self._read_total(unix_time_s)
     raw = image_loader.correct_white_balance(raw, constants.WB_TOTAL)
+    radius = self._radius_from_sun(unix_time_s)
 
-    r = np.arange(raw.shape[0])
-    c = np.arange(raw.shape[1])
-    r, c = np.meshgrid(r, c, indexing='ij')
-    radius = np.sqrt((r - metadata.sun_center[0])**2 +
-                     (c - metadata.sun_center[1])**2)
+    raw = raw[_CROP_PIXELS:-_CROP_PIXELS, _CROP_PIXELS:-_CROP_PIXELS]
+    radius = radius[_CROP_PIXELS:-_CROP_PIXELS, _CROP_PIXELS:-_CROP_PIXELS]
 
-    radius = radius[200:-200, 200:-200]
-    raw = raw[200:-200, 200:-200]
-
+    # Computes mean pixel value versus radius for each Bayer subgrid.
     mean_raw = {}
     radius_bins = np.linspace(0, np.max(radius), 100)
     for color in image_loader.BAYER_MASK_OFFSET:
@@ -279,50 +278,83 @@ class Renderer:
         mean_raw[color].append(np.nanmean(raw_color[mask]))
       mean_raw[color] = np.asarray(mean_raw[color])
 
-    plt.figure()
-    for color in image_loader.BAYER_MASK_OFFSET:
-      plt.semilogy(radius_bins[:-1], mean_raw[color], label=color, markersize=1)
-    plt.legend()
-    plt.ylim(1e3)
-    plt.title(f'{unix_time_s} - brightness vs radius')
-
-    plt.figure()
-    for color in image_loader.BAYER_MASK_OFFSET:
-      plt.plot(radius_bins[:-1],
-                   mean_raw[color] / mean_raw['green0'],
-                   label=color,
-                   markersize=1)
-    plt.legend()
-    plt.title(f'{unix_time_s} - color ratios')
-
-    # Let's apply a fit!
+    # Computes mean pixel value versus radius over all Bayer subgrids.
     all_color_mean = 0
     for color in image_loader.BAYER_MASK_OFFSET:
       all_color_mean += mean_raw[color]
     all_color_mean *= 1 / len(image_loader.BAYER_MASK_OFFSET)
 
-    radius_min = 300
-    radius_max = 1500
-    mask = np.logical_and(radius_bins[:-1] > radius_min,
-                          radius_bins[:-1] < radius_max)
+    # Fits a polylogarithmic function to pixel values versus radius.
+    mask = np.logical_and(radius_bins[:-1] > CORONA_RADIUS_MIN,
+                          radius_bins[:-1] < CORONA_RADIUS_MAX)
     radius_fit = radius_bins[:-1][mask]
     raw_fit = all_color_mean[mask]
-    p = np.polyfit(radius_fit, np.log(raw_fit), 4)
-    print('Fit:', p)
+    p = np.polyfit(radius_fit, np.log(raw_fit), 6)
+    return p
 
-    plt.figure()
-    plt.semilogy(radius_fit, raw_fit, 'k', label='Data')
-    plt.semilogy(radius_fit, np.exp(np.polyval(p, radius_fit)), 'r', label='Fit')
-    plt.legend()
-    plt.title(f'{unix_time_s} - fit')
 
-    # Apply fit.
-    hdr = raw * np.exp(-np.polyval(p, radius))
-    hdr = hdr[500:-500, 1000:-1000]
-    rgb =  _demosaic_image(hdr, np.nanmax(hdr))
-    rgb = np.maximum(0, np.tanh(5 * rgb))
-    plt.figure()
-    plt.imshow(rgb)
+  def render_total(self, unix_time_s: float, corona_polylog_fit: npt.NDArray,
+                   show_plots: bool=True):
+    metadata = self._get_metadata(unix_time_s)
+    raw = self._read_total(unix_time_s)
+
+    balanced_raw = image_loader.correct_white_balance(raw, constants.WB_TOTAL)
+
+    # Apply corona levelling fit.
+    radius = self._radius_from_sun(unix_time_s)
+    leveled_raw = balanced_raw * np.exp(
+        -np.polyval(corona_polylog_fit, radius))
+
+    # Perform initial denoising, filtering each Bayer subgrid independently.
+    denoised_raw = np.zeros(raw.shape, dtype=float)
+    for color in image_loader.BAYER_MASK_OFFSET:
+      r0, c0 = image_loader.BAYER_MASK_OFFSET[color]
+      center = (
+          (metadata.sun_center[0] + r0)/ 2,
+          (metadata.sun_center[1] + c0)/ 2,
+      )
+      denoised_raw[r0::2, c0::2] = filtering.radial_gaussian_filter(
+          leveled_raw[r0::2, c0::2],
+          center,
+          sigma_r=10,
+          sigma_theta=5,
+          min_radius=200,
+          taper_width=100,
+      )
+
+    # Use linear rendering for brightest parts of image (prominences, etc).
+    linear_rgb = _demosaic_image(denoised_raw, np.nanmax(denoised_raw))
+
+    # Render corona using nonlinear compression of values.
+    def one_sided_sigmoid(x):
+      y = np.copy(x)
+      mask = x > 0
+      y[mask] = x[mask] / (1 + x[mask])
+      return y
+    radial_gain = 1 #+ radius / 10e3
+
+    compressed_raw = 0.5 + 0.5 * one_sided_sigmoid(2 * radial_gain * (denoised_raw - 1))
+    compressed_raw = np.clip(compressed_raw, a_min=0, a_max=1)
+    corona_rgb = _demosaic_image(compressed_raw, 1)
+
+    if show_plots:
+      plt.figure()
+      plt.imshow(linear_rgb)
+
+      plt.figure()
+      plt.imshow(corona_rgb)
+
+
+    # TODO: implement proper combination of linear and compressed corona images.
+    final_rgb = corona_rgb
+
+    # Save rendered image to file.
+    index = self.index_from_unix_time_s[unix_time_s]
+    np.savez(
+        filepaths.rendered(index),
+        rgb=final_rgb
+    )
+
 
   def _correct_partials(self):
     """We cannot use this function because it requires too much disk space."""

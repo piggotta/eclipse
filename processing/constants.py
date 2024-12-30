@@ -5,7 +5,7 @@ import image_loader
 PHOTOS_PATH = 'photos'
 OUTPUTS_PATH = 'outputs'
 HDR_TOTALS_PATH = 'outputs/hdr'
-CORRECTED_RAWS_PATH = 'outputs/raws'
+RENDERED_PATH = 'outputs/rendered'
 
 IND_FIRST_SUN = 978
 IND_FIRST_PARTIAL = 994
