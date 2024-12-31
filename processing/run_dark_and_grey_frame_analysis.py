@@ -32,28 +32,10 @@ def analyze_black_frames(processor: raw_processor.RawProcessor()):
 def analyze_grey_frames(processor: raw_processor.RawProcessor()):
   print('== Processing grey frames  ==')
   grey_images = eclipse_image_loader.maybe_read_images_by_index(
-      range(constants.IND_FIRST_GREY, constants.IND_LAST_GREY + 1)
+      range(constants.IND_FIRST_TOTAL + len(constants.EXPOSURES),
+            constants.IND_FIRST_TOTAL + 11 * len(constants.EXPOSURES))
   )
   processor.process_grey_frames(grey_images, verbose=True)
-
-  # Manual adjustment: found to empirically improve exposure stack alignment
-  # for the current set of eclipse images (2024-04-08 in eastern USA).
-  correction_factor = 0.98
-  print()
-  print(f'Applying a manual correction factor of {correction_factor:.3f} for the '
-        'following exposures:')
-  for ind in range(2):
-    processor.effective_exposures_s[ind] *= correction_factor
-    exposure = constants.EXPOSURES[ind]
-    print(
-        f'  {exposure.exposure_s:6.4f} s, '
-        f'f/{exposure.f_number:5.2f}, ISO {exposure.iso:4d}'
-    )
-  print('This correction factor was empirically found to improve exposure '
-        'stacking for the current set of eclipse images '
-        '(2024-04-08 in the eastern USA)'
-        )
-  print()
 
   print('== Grey frame summary ==')
   print()

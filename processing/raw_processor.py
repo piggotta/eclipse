@@ -146,7 +146,7 @@ class RawProcessor:
       maybe_print(f'Bayer mask: {colour} {offset}')
 
       for stack_num, stack in enumerate(stacks):
-        images = [image.raw_image[offset[0]::2, offset[1]::2]
+        images = [image.raw_image[200 + offset[0]:-200:2, offset[1] + 200:-200:2]
                   for image in stack]
         invalid_pixels = []
 
@@ -155,15 +155,18 @@ class RawProcessor:
           num_pixels = np.prod(image.shape)
 
           # Pixels that are too saturated or too dark are considered invalid.
-          current_invalid_pixels = np.logical_or(image > 12e3, image < 40)
+          current_invalid_pixels = np.logical_or(image > 8e3, image < 200)
           invalid_pixels.append(current_invalid_pixels)
 
           # Do not use images that have too many invalid pixels.
-          if np.sum(current_invalid_pixels) / num_pixels > 0.7:
+          if np.sum(np.logical_not(current_invalid_pixels)) < 1000:
             current_invalid = True
           else:
             current_invalid = False
           invalid.append(current_invalid)
+          print(f'{np.sum(np.logical_not(current_invalid_pixels)):d} / '
+                f'{np.size(current_invalid_pixels):d}')
+        print()
 
         maybe_print(f'  Stack {stack_num:d}:')
         for ind in range(len(stack) - 1):
