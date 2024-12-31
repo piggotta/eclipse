@@ -4,13 +4,13 @@ import os
 import numpy as np
 
 import constants
-import image_loader
+import eclipse_image_loader
 import raw_processor
 
 
 def analyze_black_frames(processor: raw_processor.RawProcessor()):
   print('== Processing black frames ==')
-  black_frames = image_loader.maybe_read_images_by_index(
+  black_frames = eclipse_image_loader.maybe_read_images_by_index(
       range(constants.IND_FIRST_BLACK, constants.IND_LAST_BLACK)
   )
   processor.process_black_frames(black_frames)
@@ -31,7 +31,7 @@ def analyze_black_frames(processor: raw_processor.RawProcessor()):
 
 def analyze_grey_frames(processor: raw_processor.RawProcessor()):
   print('== Processing grey frames  ==')
-  grey_images = image_loader.maybe_read_images_by_index(
+  grey_images = eclipse_image_loader.maybe_read_images_by_index(
       range(constants.IND_FIRST_GREY, constants.IND_LAST_GREY + 1)
   )
   processor.process_grey_frames(grey_images, verbose=True)

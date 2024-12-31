@@ -14,6 +14,7 @@ from scipy import signal
 
 import constants
 import drawing
+import eclipse_image_loader
 import eclipse_tracker
 import filepaths
 import image_loader
@@ -335,7 +336,7 @@ class PartialEclipsePreprocessor:
     is_first_partial = True
     for index in indices:
       try:
-        attr = image_loader.maybe_read_image_attributes_by_index(index)
+        attr = eclipse_image_loader.maybe_read_image_attributes_by_index(index)
       except ValueError:
         continue
 
@@ -345,7 +346,7 @@ class PartialEclipsePreprocessor:
         valid_indices.append(index)
         if is_first_partial:
           is_first_partial = False
-          first_image = image_loader.maybe_read_image_by_index(index)
+          first_image = eclipse_image_loader.maybe_read_image_by_index(index)
         print(f'  {filename:s}: partial eclipse')
       else:
         print(f'  {filename:s}: invalid')
@@ -359,7 +360,7 @@ class PartialEclipsePreprocessor:
     self.is_sun = np.zeros((num_partials, *cropped_shape))
     self.image_metadata = []
     for ind, index in enumerate(valid_indices):
-      image = image_loader.maybe_read_image_by_index(index)
+      image = eclipse_image_loader.maybe_read_image_by_index(index)
       filename = os.path.split(image.filepath)[1]
       print(f'  {filename:s}')
 

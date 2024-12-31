@@ -1,4 +1,3 @@
-from collections.abc import Sequence
 import dataclasses
 import datetime
 import os
@@ -7,9 +6,6 @@ import exifread
 import numpy as np
 import numpy.typing as npt
 import rawpy
-
-import constants
-import filepaths
 
 
 BAYER_MASK_OFFSET = {
@@ -20,7 +16,7 @@ BAYER_MASK_OFFSET = {
 }
 
 
-_DEFAULT_BAYER_MASK = BAYER_MASK_OFFSET['red']
+DEFAULT_BAYER_MASK = BAYER_MASK_OFFSET['red']
 
 
 @dataclasses.dataclass
@@ -59,7 +55,7 @@ class RawImage:
     )
 
 
-def read_attributes(filepath) -> RawImage:
+def read_attributes(filepath, time_zone: datetime.tzinfo) -> RawImage:
   # Read image index from filename.
   filename = os.path.split(filepath)[1]
   if filename[:4] != 'IMG_' or filename[-4:] != '.CR2':
@@ -78,7 +74,8 @@ def read_attributes(filepath) -> RawImage:
               tags['EXIF SubSecTimeOriginal'].values)
   date, time = time_str.split(' ')
   date = date.replace(':', '-')
-  image_time = datetime.datetime.fromisoformat(date + ' ' + time + '0')
+  local_time = datetime.datetime.fromisoformat(date + ' ' + time + '0')
+  image_time = local_time.astimezone(time_zone)
 
   return RawImage(
       filepath=filepath,
@@ -93,8 +90,9 @@ def read_attributes(filepath) -> RawImage:
 
 def read_image(
     filepath: str,
-    bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK) -> RawImage:
-  image = read_attributes(filepath)
+    time_zone: datetime.tzinfo,
+    bayer_offset: tuple[int, int] = DEFAULT_BAYER_MASK) -> RawImage:
+  image = read_attributes(filepath, time_zone)
 
   # Read raw image.
   with rawpy.imread(filepath) as raw:
@@ -103,68 +101,6 @@ def read_image(
   # Use the selected Bayer subimage as our black and white image.
   image.bw_image = image.raw_image[bayer_offset[0]::2, bayer_offset[1]::2]
   return image
-
-
-def maybe_read_image_attributes_by_index(index: int) -> RawImage:
-  filepath = filepaths.raw(index)
-  if not os.path.isfile(filepath):
-    raise ValueError(f'{filepath} does not exist.')
-  return read_attributes(filepath)
-
-
-def maybe_read_images_attributes_by_index(
-    indices: Sequence[int], verbose: bool = True) -> list[RawImage]:
-  """Reads camera images by index. Skips any missing files."""
-  if verbose:
-    print('Loading...')
-
-  attributes = []
-  for index in indices:
-    try:
-      attributes.append(
-          maybe_read_image_attributes_by_index(index))
-      if verbose:
-        print(f'  {filepaths.raw(index)}')
-    except ValueError:
-      pass
-
-  if verbose:
-    print()
-
-  return attributes
-
-
-def maybe_read_image_by_index(
-    index: int,
-    bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK) -> RawImage:
-  filepath = filepaths.raw(index)
-  if not os.path.isfile(filepath):
-    raise ValueError(f'{filepath} does not exist.')
-  return read_image(filepath, bayer_offset=bayer_offset)
-
-
-def maybe_read_images_by_index(
-    indices: Sequence[int],
-    bayer_offset: tuple[int, int] = _DEFAULT_BAYER_MASK,
-    verbose: bool = True) -> list[RawImage]:
-  """Reads camera images by index. Skips any missing files."""
-  if verbose:
-    print('Loading...')
-
-  images = []
-  for index in indices:
-    try:
-      images.append(
-          maybe_read_image_by_index(index, bayer_offset=bayer_offset))
-      if verbose:
-        print(f'  {filepaths.raw(index)}')
-    except ValueError:
-      pass
-
-  if verbose:
-    print()
-
-  return images
 
 
 def correct_white_balance(

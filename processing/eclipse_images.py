@@ -11,6 +11,7 @@ import numpy as np
 import numpy.typing as npt
 
 import constants
+import eclipse_image_loader
 import eclipse_tracker
 import filepaths
 import filtering
@@ -99,7 +100,7 @@ class TotalEclipseProcessor:
 
   def _stack_totals(self) -> list[int]:
     print('Read total eclipse image attributes...')
-    attributes = image_loader.maybe_read_images_attributes_by_index(
+    attributes = eclipse_image_loader.maybe_read_images_attributes_by_index(
         range(constants.IND_FIRST_TOTAL, constants.IND_LAST_TOTAL + 1)
     )
 
@@ -110,15 +111,17 @@ class TotalEclipseProcessor:
       if len(stack) != len(constants.EXPOSURES):
         continue
 
-      metadata = stack[0]
+      metadata = stack[-1]
       index = metadata.index
       totals_indices.append(index)
+      #continue
       unix_time_s = metadata.time.timestamp()
       npz_filepath = filepaths.hdr_total(index)
       print('  ' + npz_filepath)
 
       indices = [entry.index for entry in stack]
-      images = image_loader.maybe_read_images_by_index(indices, verbose=False)
+      images = eclipse_image_loader.maybe_read_images_by_index(
+          indices, verbose=False)
       hdr_image = self.processor.stack_hdr_image(images)
 
       np.savez(npz_filepath,
@@ -250,7 +253,7 @@ class Renderer:
 
   def _read_and_correct_partial(self, unix_time_s) -> npt.NDArray:
     index = self.index_from_unix_time_s[unix_time_s]
-    image = image_loader.maybe_read_image_by_index(index)
+    image = eclipse_image_loader.maybe_read_image_by_index(index)
     corrected_image = self.processor.remove_hot_pixels(
         self.processor.subtract_background(image))
     return corrected_image.raw_image
@@ -364,7 +367,7 @@ class Renderer:
       print(f'  IMG_{index}.CR2')
 
       try:
-        image = image_loader.maybe_read_image_by_index(index)
+        image = eclipse_image_loader.maybe_read_image_by_index(index)
         corrected_image = self.processor.remove_hot_pixels(
             self.processor.subtract_background(image))
         np.savez(filepaths.corrected_raw(index),

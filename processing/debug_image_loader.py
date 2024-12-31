@@ -13,7 +13,7 @@ import image_loader
 def print_image_params(index: int) -> image_loader.RawImage:
   filename = f'IMG_{index:04d}.CR2'
   filepath = os.path.join(constants.PHOTOS_PATH, filename)
-  image = image_loader.read_image(filepath)
+  image = image_loader.read_image(filepath, constants.TIME_ZONE)
 
   print(filename)
   print('  Index:', image.index)
