@@ -123,6 +123,12 @@ Demosaicing
    default 3 is essentially impossible to beat.
 
 === Updated HDR processing ===
+Current idea
+1. [DONE] Corona fit for only a limited azimuth
+2. [DONE] Independent corona fits for each color channel
+3. Denoise in color space after demosaicing (heavy chrominance denoising)
+4. Asymmetric compression for corona (i.e. don't use a sigmoid)
+
 Stacking for colour
 * Process prominences (linear + minor HDR) and corona (nonlinear) independently
 * Combine using some type of thresholding

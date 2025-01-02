@@ -12,6 +12,8 @@ import constants
 import filepaths
 import image_loader
 
+# Width to crop from edge of brght images, which are known to have artifacts.
+CROP_PIXELS = 200
 
 def split_into_exposure_stacks(images: Sequence[image_loader.RawImage]):
   stacks = []
@@ -59,9 +61,10 @@ class RawProcessor:
   shape: tuple[int, int]
   background: npt.NDArray
   stdev: npt.NDArray
+  hot_pixels: npt.NDArray
   hot_pixel_indices: list[tuple[int, int]]
 
-  def __init__(self, hot_pixel_threshold: int = 3000,
+  def __init__(self, hot_pixel_threshold: int = 2500,
                saturated_pixel_value: int = 15_000):
     self.hot_pixel_threshold = hot_pixel_threshold
     self.saturated_pixel_value = saturated_pixel_value
@@ -119,6 +122,7 @@ class RawProcessor:
     hot_pixels[-2:, :] = False
     hot_pixels[:, :1] = False
     hot_pixels[:, -2:] = False
+    self.hot_pixels = hot_pixels
     self.hot_pixel_indices = np.argwhere(hot_pixels)
 
   def process_grey_frames(self, images: Sequence[image_loader.RawImage],
@@ -127,11 +131,30 @@ class RawProcessor:
       if verbose:
         print(message)
 
-    images = [
-        self.remove_hot_pixels(self.subtract_background(image))
-        for image in images
-    ]
-    stacks = split_into_exposure_stacks(images)
+    # Perform background subtraction and mask out invalid pixels (saturated,
+    # too dark, or known hot pixels)
+    corrected_images = []
+    for image in images:
+      corrected_image = self.subtract_background(image)
+
+      # Mark invalid pixels with Nan.
+      invalid = np.logical_or.reduce((
+          self.hot_pixels,
+          image.raw_image > self.saturated_pixel_value,
+          corrected_image.raw_image < 300,
+      ))
+      corrected_image.raw_image[invalid] = np.nan
+
+      # Crop out edges of images, which have known artifacts in bright images.
+      corrected_image.raw_image = corrected_image.raw_image[
+          CROP_PIXELS:-CROP_PIXELS,
+          CROP_PIXELS:-CROP_PIXELS
+      ]
+
+      corrected_images.append(corrected_image)
+
+    # Seperate into exposure stacks.
+    stacks = split_into_exposure_stacks(corrected_images)
 
     maybe_print('Comparing expected vs actual ratios in pixel values for '
                 'different exposures...')
@@ -140,41 +163,22 @@ class RawProcessor:
     actual_ratios = {}
     expected_ratios = [[] for _ in range(num_ratios)]
     for colour in image_loader.BAYER_MASK_OFFSET:
-      actual_ratios[colour] = [[] for _ in range(num_ratios)]
-
       offset = image_loader.BAYER_MASK_OFFSET[colour]
       maybe_print(f'Bayer mask: {colour} {offset}')
 
+      actual_ratios[colour] = [[] for _ in range(num_ratios)]
       for stack_num, stack in enumerate(stacks):
-        images = [image.raw_image[200 + offset[0]:-200:2, offset[1] + 200:-200:2]
+        images = [image.raw_image[offset[0]::2, offset[1]::2]
                   for image in stack]
-        invalid_pixels = []
-
-        invalid = []
-        for image in images:
-          num_pixels = np.prod(image.shape)
-
-          # Pixels that are too saturated or too dark are considered invalid.
-          current_invalid_pixels = np.logical_or(image > 8e3, image < 200)
-          invalid_pixels.append(current_invalid_pixels)
-
-          # Do not use images that have too many invalid pixels.
-          if np.sum(np.logical_not(current_invalid_pixels)) < 1000:
-            current_invalid = True
-          else:
-            current_invalid = False
-          invalid.append(current_invalid)
-          print(f'{np.sum(np.logical_not(current_invalid_pixels)):d} / '
-                f'{np.size(current_invalid_pixels):d}')
-        print()
 
         maybe_print(f'  Stack {stack_num:d}:')
         for ind in range(len(stack) - 1):
-          if invalid[ind] or invalid[ind + 1]:
-            continue
           actual_ratio = images[ind] / np.maximum(images[ind + 1], 1e-3)
-          actual_ratio[invalid_pixels[ind]] = np.nan
-          actual_ratio[invalid_pixels[ind + 1]] = np.nan
+
+          # Do not use image pairs that have too few overlapping pixels.
+          if np.sum(np.isfinite(actual_ratio)) < 100:
+            continue
+
           actual_ratios[colour][ind].append(np.nanmean(actual_ratio))
 
           expected_ratio = (stack[ind].get_exposure().norm_exposure_s() /
@@ -278,7 +282,7 @@ class RawProcessor:
       # Determines non-saturated subset of image and weights to use for merging.
       saturated = ndimage.maximum_filter(
           image.raw_image > self.saturated_pixel_value,
-          size=3,
+          size=2,
       )
       dist_to_saturated = ndimage.distance_transform_edt(
           np.logical_not(saturated))

@@ -16,7 +16,16 @@ BAYER_MASK_OFFSET = {
 }
 
 
-DEFAULT_BAYER_MASK = BAYER_MASK_OFFSET['red']
+BAYER_MASK_PLOT_COLORS = {
+    'red': 'tab:red',
+    'green0': 'limegreen',
+    'green1': 'darkgreen',
+    'blue': 'tab:blue',
+}
+
+
+DEFAULT_BAYER_COLOR = 'red'
+DEFAULT_BAYER_OFFSET = BAYER_MASK_OFFSET[DEFAULT_BAYER_COLOR]
 
 
 @dataclasses.dataclass
@@ -91,7 +100,7 @@ def read_attributes(filepath, time_zone: datetime.tzinfo) -> RawImage:
 def read_image(
     filepath: str,
     time_zone: datetime.tzinfo,
-    bayer_offset: tuple[int, int] = DEFAULT_BAYER_MASK) -> RawImage:
+    bayer_offset: tuple[int, int] = DEFAULT_BAYER_OFFSET) -> RawImage:
   image = read_attributes(filepath, time_zone)
 
   # Read raw image.

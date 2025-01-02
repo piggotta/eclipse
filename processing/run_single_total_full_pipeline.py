@@ -29,7 +29,7 @@ def stack_single_total(processor: raw_processor.RawProcessor,
 
   indices = [entry.index for entry in stack]
   images = eclipse_image_loader.maybe_read_images_by_index(indices, verbose=False)
-  hdr_image = processor.stack_hdr_image(images, smoothing_radius=1)
+  hdr_image = processor.stack_hdr_image(images, smoothing_radius=5)
 
   np.savez(npz_filepath,
            index=index,
@@ -39,8 +39,8 @@ def stack_single_total(processor: raw_processor.RawProcessor,
   return unix_time_s
 
 
-def main():
-  totals_index = 10
+def main(restack: bool = True):
+  totals_index = 2
 
   # Load raw image processor configuration from file.
   processor = raw_processor.RawProcessor()
@@ -49,19 +49,27 @@ def main():
   # Load full eclipse image sequence from file.
   sequence = eclipse_images.load_sequence('full_sequence')
 
-  # Re-stack a single image.
-  unix_time_s = stack_single_total(processor, totals_index)
+  # Find unix time of the total eclipse image to render.
+  totals_unix_time_s = [entry.unix_time_s for entry in sequence.image_metadata
+                        if entry.image_type == eclipse_images.ImageType.HDR]
+  unix_time_s = totals_unix_time_s[totals_index]
 
   # Create renderer object.
-  renderer = eclipse_images.Renderer(processor, sequence)
+  options = eclipse_images.RendererOptions(
+      shape=constants.RENDER_SHAPE,
+      bright_corona_deg_lims=constants.RENDER_BRIGHT_CORONA_DEG_LIMS,
+      dark_corona_deg_lims=constants.RENDER_DARK_CORONA_DEG_LIMS,
+  )
+  renderer = eclipse_images.Renderer(processor, sequence, options)
 
-  # Load corona fit.
-  p_fit = np.load(filepaths.corona_fit())['p_fit']
+  # Re-stack a single image.
+  if restack and stack_single_total(processor, totals_index) != unix_time_s:
+    raise ValueError('Incorrect Unix time for the image we re-stacked.')
 
   # Render image.
-  renderer.render_total(unix_time_s, p_fit)
+  renderer.render_total(unix_time_s, show_plots=True)
 
   plt.show()
 
 if __name__ == '__main__':
-  main()
+  main(restack=False)

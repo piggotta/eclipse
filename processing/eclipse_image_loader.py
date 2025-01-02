@@ -39,7 +39,7 @@ def maybe_read_images_attributes_by_index(
 
 def maybe_read_image_by_index(
     index: int,
-    bayer_offset: tuple[int, int] = image_loader.DEFAULT_BAYER_MASK
+    bayer_offset: tuple[int, int] = image_loader.DEFAULT_BAYER_OFFSET
     ) -> image_loader.RawImage:
   filepath = filepaths.raw(index)
   if not os.path.isfile(filepath):
@@ -53,7 +53,7 @@ def maybe_read_image_by_index(
 
 def maybe_read_images_by_index(
     indices: Sequence[int],
-    bayer_offset: tuple[int, int] = image_loader.DEFAULT_BAYER_MASK,
+    bayer_offset: tuple[int, int] = image_loader.DEFAULT_BAYER_OFFSET,
     verbose: bool = True) -> list[image_loader.RawImage]:
   """Reads camera images by index. Skips any missing files."""
   if verbose:
