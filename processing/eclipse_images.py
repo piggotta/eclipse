@@ -145,12 +145,16 @@ class TotalEclipseProcessor:
     self.totals_track = tracker.align_totals_to_partials_track(
         self.partials_track)
 
-    tracker.plot_track(self.totals_track,
-                       range(len(self.totals_track.unix_time_s)))
-
   def stack_and_track_totals(self):
     indices = self._stack_totals()
     self._track_totals(indices)
+
+  def plot_track(self):
+    if not self.totals_track or not self.totals_metadata:
+      raise RuntimeError('stack_and_track_totals() must be called before '
+                         'generate_full_track()')
+    tracker.plot_track(self.totals_track,
+                       range(len(self.totals_track.unix_time_s)))
 
   def build_sequence(self) -> EclipseSequence:
     if not self.totals_track or not self.totals_metadata:

@@ -5,9 +5,12 @@ import numpy as np
 
 import eclipse_tracker
 import partial_eclipse_tracker
+import util
 
 
-def main(plot_only: bool = False):
+def main(show_plots: bool, plot_only: bool = False):
+  util.print_title('Track particle eclipse images')
+
   options = partial_eclipse_tracker.PartialEclipseTrackerOptions(
       guess_sun_radius=100,
       # Moon movement rate estimate
@@ -36,16 +39,17 @@ def main(plot_only: bool = False):
   print('Final track:')
   print(print_track)
 
-  # Plot final aligned images.
-  ind_to_plot = np.asarray(
-      np.linspace(0, tracker.bw_images.shape[0] - 1, 30),
-      dtype=int
-  )
-  tracker.plot_track(track, ind_to_plot)
+  if show_plots:
+    # Plot final aligned images.
+    ind_to_plot = np.asarray(
+        np.linspace(0, tracker.bw_images.shape[0] - 1, 30),
+        dtype=int
+    )
+    tracker.plot_track(track, ind_to_plot)
+    plt.show()
 
-  plt.show()
   return
 
 
 if __name__ == '__main__':
-  main(plot_only=False)
+  main(show_plots=True, plot_only=False)

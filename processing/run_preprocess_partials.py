@@ -1,8 +1,11 @@
 import matplotlib.pyplot as plt
 
 import partial_eclipse_tracker
+import util
 
 def main():
+  util.print_title('Preprocess partial eclipse images')
+
   preprocessor = partial_eclipse_tracker.PartialEclipsePreprocessor()
   preprocessor.preprocess_images()
   preprocessor.save_to_file('preprocess_partials')

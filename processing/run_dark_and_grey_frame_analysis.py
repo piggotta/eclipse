@@ -6,6 +6,7 @@ import numpy as np
 import constants
 import eclipse_image_loader
 import raw_processor
+import util
 
 
 def analyze_black_frames(processor: raw_processor.RawProcessor()):
@@ -54,6 +55,7 @@ def analyze_grey_frames(processor: raw_processor.RawProcessor()):
   print()
 
 def main():
+  util.print_title('Dark and grey frame analysis')
   processor = raw_processor.RawProcessor()
   analyze_black_frames(processor)
   analyze_grey_frames(processor)

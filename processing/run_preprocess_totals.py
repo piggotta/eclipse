@@ -4,9 +4,12 @@ import eclipse_images
 import eclipse_tracker
 import partial_eclipse_tracker
 import raw_processor
+import util
 
 
-def main():
+def main(show_plots: bool = False):
+  util.print_title('Preprocess total eclipse images')
+
   # Load raw image processor configuration from file.
   processor = raw_processor.RawProcessor()
   processor.load_calibration_from_file('calibration')
@@ -26,7 +29,9 @@ def main():
   eclipse_images.save_sequence('full_sequence', sequence)
   new_sequence = eclipse_images.load_sequence('full_sequence')
 
-  plt.show()
+  if show_plots:
+    totals_processor.plot_track()
+    plt.show()
 
 if __name__ == '__main__':
-  main()
+  main(show_plots=True)

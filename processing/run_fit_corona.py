@@ -5,9 +5,12 @@ import constants
 import eclipse_images
 import filepaths
 import raw_processor
+import util
 
 
-def main():
+def main(show_plots: bool = False):
+  util.print_title('Fit corona rolloff with radius')
+
   # Load raw image processor configuration from file.
   processor = raw_processor.RawProcessor()
   processor.load_calibration_from_file('calibration')
@@ -28,10 +31,11 @@ def main():
                         if entry.image_type == eclipse_images.ImageType.HDR]
 
   # Fit corona from the middle of the total eclipse sequence.
-  renderer.fit_corona(totals_unix_time_s[5:-5], show_plots=True)
+  renderer.fit_corona(totals_unix_time_s[5:-5], show_plots=show_plots)
 
-  plt.show()
+  if show_plots:
+    plt.show()
 
 
 if __name__ == '__main__':
-  main()
+  main(show_plots=True)
