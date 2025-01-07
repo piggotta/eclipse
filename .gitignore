@@ -1,0 +1,5 @@
+**/__pycache__/**
+**/*.CR2
+**/*.CR2.xmp
+**/*.png
+outputs/*

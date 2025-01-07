@@ -7,6 +7,8 @@ import numpy as np
 import exifread
 import rawpy
 
+import image_loader
+
 PHOTO_PATH = 'photos'
 
 # Demosaicing
@@ -24,60 +26,6 @@ PHOTO_PATH = 'photos'
 # 3. Algorithm=1 and median_filter_passes=3 seems best for demosaicing (less
 #   color noise than default 3 on flat areas). With no median filtering, the
 #   default 3 is essentially impossible to beat.
-
-def print_raw_params(filename: str, print_dir: bool = False
-                    ) -> datetime.datetime:
-  filepath = os.path.join(PHOTO_PATH, filename)
-
-  print(filename)
-
-  print('Rawpy information')
-  with rawpy.imread(filepath) as raw:
-    print(raw)
-    if print_dir:
-      print(dir(raw))
-    print(raw.camera_whitebalance)
-    print(raw.raw_pattern)
-    print(raw.color_desc)
-    print()
-
-  with open(filepath, 'rb') as f:
-    tags = exifread.process_file(f)
-
-  print('EXIF information')
-  if print_dir:
-    print()
-    print('EXIF tags:')
-    print(type(tags))
-    for tag in tags:
-      print(f'  {tag}')
-    print()
-
-  for tag in ['EXIF ExposureTime', 'EXIF FNumber', 'EXIF ISOSpeedRatings',
-      'EXIF DateTimeOriginal', 'EXIF SubSecTime']:
-    print(f'  {tag}:', tags[tag], type(tags[tag].values[0]))
-  for tag in ['Image DateTime', 'MakerNote LensModel', 'MakerNote LensType']:
-    print(f'  {tag}:', tags[tag],  type(tags[tag].values))
-
-  time_str = (tags['EXIF DateTimeOriginal'].values + '.' +
-              tags['EXIF SubSecTimeOriginal'].values)
-  date, time = time_str.split(' ')
-  date = date.replace(':', '-')
-  image_time = datetime.datetime.fromisoformat(date + ' ' + time + '0')
-  print('Time:', image_time, type(image_time))
-
-  exposure_s = float(tags['EXIF ExposureTime'].values[0])
-  print('Exposure (s):', exposure_s)
-
-  f_number = float(tags['EXIF FNumber'].values[0])
-  print('F number:', f_number)
-
-  iso = float(tags['EXIF ISOSpeedRatings'].values[0])
-  print('ISO:', iso)
-
-  print()
-
-  return image_time
 
 def compare_demosaicing():
   for filename in ('IMG_1001.CR2', 'IMG_1404.CR2'):
@@ -146,20 +94,12 @@ def convert_to_bw():
       plt.colorbar()
       plt.title(f'BW - {filename}')
 
-
-#def get_single_color(filename: str)
-#  get_single_color('IMG_1001.CR2')
-
-#def test_tracking
-
 def main():
   start = time.time()
-  print_raw_params('IMG_1001.CR2', print_dir=True)
-  t0 = print_raw_params('IMG_1001.CR2')
-  t1 = print_raw_params('IMG_1343.CR2')
-  print(t1 - t0)
-  #compare_demosaicing()
-  #convert_to_bw()
+
+  compare_demosaicing()
+  convert_to_bw()
+
   print(f'Time elapsed: {time.time() - start:.3f} s')
 
   plt.show()
