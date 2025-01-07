@@ -39,7 +39,7 @@ def stack_single_total(processor: raw_processor.RawProcessor,
   return unix_time_s
 
 
-def main(restack: bool = True):
+def main(restack: bool = True, prerender: bool = True):
   totals_index = 2
 
   # Load raw image processor configuration from file.
@@ -67,9 +67,11 @@ def main(restack: bool = True):
     raise ValueError('Incorrect Unix time for the image we re-stacked.')
 
   # Render image.
-  renderer.render_total(unix_time_s, show_plots=True)
+  if restack or prerender:
+    renderer.prerender_total(unix_time_s, show_plots=True)
+  renderer.postrender_total(unix_time_s, show_plots=True)
 
   plt.show()
 
 if __name__ == '__main__':
-  main(restack=False)
+  main(restack=False, prerender=False)

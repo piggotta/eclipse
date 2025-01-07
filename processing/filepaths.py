@@ -45,6 +45,8 @@ def hdr_total(index: int) -> str:
   return _make_folder_and_return_path(HDR_TOTALS_PATH,
                                       f'total_{index:04d}.npz')
 
+def hdr_temp(index: int) -> str:
+  return _make_folder_and_return_path(HDR_TOTALS_PATH, f'temp_{index:04d}.npz')
 
 def rendered(index: int) -> str:
   return _make_folder_and_return_path(RENDERED_PATH, f'img_{index:04d}.npz')

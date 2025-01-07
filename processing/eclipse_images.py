@@ -410,7 +410,7 @@ class Renderer:
       fits['bright-corona_' + color] = bright_fit[color]
     np.savez(filepaths.corona_fit(), **fits)
 
-  def render_total(self, unix_time_s: float, show_plots: bool=False):
+  def prerender_total(self, unix_time_s: float, show_plots: bool=False):
     metadata = self._get_metadata(unix_time_s)
     raw = self._read_total(unix_time_s)
     fits = np.load(filepaths.corona_fit())
@@ -457,44 +457,6 @@ class Renderer:
     # Demosaic image in linear space.
     linear_rgb = colour_demosaicing.demosaicing_CFA_Bayer_Menon2007(leveled_raw)
 
-    # Render corona using nonlinear compression of values.
-    def one_sided_sigmoid(x):
-      y = np.copy(x)
-      mask = x > 0
-      y[mask] = x[mask] / (1 + x[mask])
-      return y
-
-    #compressed_raw = 0.8 * (0.5 + 0.5 * one_sided_sigmoid((leveled_raw - 2)))
-    compressed_raw = np.clip(leveled_raw, a_min=0, a_max=1)
-    corona_rgb = _demosaic_image(compressed_raw, 1)
-
-    if False:
-      # Perform initial denoising, filtering each Bayer subgrid independently.
-      denoised_raw = np.zeros(raw.shape, dtype=float)
-      for color in image_loader.BAYER_MASK_OFFSET:
-        r0, c0 = image_loader.BAYER_MASK_OFFSET[color]
-        center = (
-            (metadata.sun_center[0] + r0)/ 2,
-            (metadata.sun_center[1] + c0)/ 2,
-        )
-        denoised_raw[r0::2, c0::2] = filtering.radial_gaussian_filter(
-            leveled_raw[r0::2, c0::2],
-            center,
-            sigma_r=10,
-            sigma_theta=5,
-            min_radius=200,
-            taper_width=100,
-        )
-
-    # TODO: implement proper combination of linear and compressed corona images.
-    final_rgb = corona_rgb
-
-    # Shift image to center on the sun, and crop to final dimensions.
-    shift = -sun_center + np.asarray(self.options.shape) / 2 + crop_offset
-    print(shift)
-    shifted = ndimage.shift(final_rgb, tuple(shift) + (0,))
-    rgb = shifted[:self.options.shape[0], :self.options.shape[1], :]
-
     if show_plots:
       for color in image_loader.BAYER_MASK_OFFSET:
         r0, c0 = image_loader.BAYER_MASK_OFFSET[color]
@@ -504,6 +466,56 @@ class Renderer:
         plt.clim(0, 2)
         plt.colorbar()
 
+    # Save intermediate image.
+    index = self.index_from_unix_time_s[unix_time_s]
+    np.savez(
+        filepaths.hdr_temp(index),
+        linear_rgb=linear_rgb,
+        crop_offset=crop_offset,
+        crop_sun_center=crop_sun_center,
+    )
+
+  def postrender_total(self, unix_time_s: float, show_plots: bool=False):
+    metadata = self._get_metadata(unix_time_s)
+    sun_center = np.asarray(metadata.sun_center)
+
+    # Load intermediate image.
+    index = self.index_from_unix_time_s[unix_time_s]
+    data = np.load(filepaths.hdr_temp(index))
+    linear_rgb = data['linear_rgb']
+    crop_offset = data['crop_offset']
+    crop_sun_center = data['crop_sun_center']
+
+    # Denoise image.
+    denoised_rgb = np.zeros(linear_rgb.shape, dtype=float)
+    for rgb_ind in range(3):
+      denoised_rgb[:, :, rgb_ind] = filtering.radial_gaussian_filter(
+          linear_rgb[:, :, rgb_ind],
+          crop_sun_center,
+          sigma_r=10,
+          sigma_theta=5,
+          min_radius=500,
+          taper_width=100,
+      )
+
+    # Render corona using nonlinear compression of values.
+    def one_sided_sigmoid(x):
+      y = np.copy(x)
+      mask = x > 0
+      y[mask] = x[mask] / (1 + x[mask])
+      return y
+
+    corona_rgb = 0.8 * (0.5 + 0.5 * one_sided_sigmoid((denoised_rgb - 1)))
+
+    # TODO: implement proper combination of linear and compressed corona images.
+    combined_rgb = corona_rgb
+
+    # Shift image to center on the sun, and crop to final dimensions.
+    shift = -sun_center + np.asarray(self.options.shape) / 2 + crop_offset
+    shifted = ndimage.shift(combined_rgb, tuple(shift) + (0,))
+    rgb = shifted[:self.options.shape[0], :self.options.shape[1], :]
+
+    if show_plots:
       plt.figure()
       plt.imshow(linear_rgb / np.nanmax(linear_rgb))
       plt.title('Linear')
@@ -512,17 +524,15 @@ class Renderer:
       plt.imshow(corona_rgb)
       plt.title('Corona')
 
-      plt.figure()
-      plt.imshow(rgb)
-      plt.title('Final')
-
     # Save rendered image to file.
-    index = self.index_from_unix_time_s[unix_time_s]
     np.savez(
         filepaths.rendered(index),
         rgb=rgb
     )
 
+  def render_total(self, unix_time_s: float, show_plots: bool=False):
+    self.prerender_total(unix_time_s, show_plots)
+    self.postrender_total(unix_time_s, show_plots)
 
   def _correct_partials(self):
     """We cannot use this function because it requires too much disk space."""
