@@ -1,0 +1,9 @@
+cattrs
+colour_demosaicing
+exifread
+float_raster
+matplotlib
+numpy
+rawpy
+scipy
+scikit-image
