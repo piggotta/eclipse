@@ -4,6 +4,7 @@ exifread
 float_raster
 matplotlib
 numpy
+PyQt6
 rawpy
 scipy
 scikit-image
